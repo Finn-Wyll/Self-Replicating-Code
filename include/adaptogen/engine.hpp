@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <functional>
 #include <string>
 #include <vector>
@@ -133,8 +134,18 @@ struct GenerationReport {
     std::vector<Metric> population_stats;
 };
 
+/// Each time the champion improved: what produced the new champion, and from what.
+struct LineageEvent {
+    int generation = 0;
+    double fitness = 0.0;       // champion fitness (on all selection cases)
+    std::string origin;         // e.g. "crossover + point mutation", "random", "seeded", "constant tuning"
+    bool has_mother = false;
+    Program mother, champion;   // the mother's program and the new champion's program
+};
+
 struct EvolutionResult {
     Program best;
+    std::vector<LineageEvent> lineage;
     double best_fitness = 0.0;
     std::vector<Metric> train_metrics, test_metrics;
     bool solved_train = false, solved_test = false;
@@ -156,6 +167,8 @@ public:
 
     /// Seed the initial population: (1 - random_fraction) of it are copies of these programs
     /// (round-robin; one exact copy of each, the others mutated once), the rest random.
+    /// Stop at the end of the current generation once *flag becomes true (e.g. a cancelled job).
+    void set_stop_flag(const std::atomic<bool>* flag) { stop_ = flag; }
     void set_seed_programs(std::vector<Program> programs, double random_fraction) {
         seeds_ = std::move(programs);
         seed_random_fraction_ = random_fraction;
@@ -166,6 +179,7 @@ private:
     EngineConfig cfg_;
     MachineSpec spec_;
     std::vector<Program> seeds_;
+    const std::atomic<bool>* stop_ = nullptr;
     double seed_random_fraction_ = 0.1;
     std::function<void(const GenerationReport&)> callback_;
 };

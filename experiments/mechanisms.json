@@ -1,0 +1,20 @@
+{
+  "description": "Section 3 of benchmarks/RESULTS.md: each bacteria-inspired mechanism at its tuned setting, 5x budget, fresh seeds.",
+  "suite": "custom",
+  "runs": 20,
+  "seed_base": 5000,
+  "generations": 500,
+  "targets": ["koza1", "nguyen10", "keijzer6", "list-sum", "list-max"],
+  "variants": {
+    "stress-pop-p15": {"mechanisms": {"stress": {"enabled": true, "trigger": "population", "patience": 15}}},
+    "hyper-start2": {"mechanisms": {"hypermutation": {"enabled": true, "initial_rate": 2.0}}},
+    "transfer-0.05": {"mechanisms": {"transfer": {"enabled": true, "rate": 0.05}}},
+    "dup-seg12": {"mechanisms": {"duplication": {"enabled": true, "max_segment": 12}}},
+    "spatial-r1": {"mechanisms": {"spatial": true}},
+    "curriculum-r2-b2": {"mechanisms": {"spatial": {"enabled": true, "radius": 2}, "curriculum": {"enabled": true, "bands": 2}}},
+    "combined": {"mechanisms": {"stress": {"enabled": true, "trigger": "population", "patience": 15},
+                                "hypermutation": {"enabled": true, "initial_rate": 2.0},
+                                "transfer": {"enabled": true, "rate": 0.05}}}
+  },
+  "out": "benchmarks/final"
+}

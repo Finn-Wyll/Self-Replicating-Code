@@ -43,6 +43,7 @@ struct Strain {
     long program_evaluations = 0;
     nlohmann::json train_metrics, test_metrics;
     bool solved_test = false;
+    nlohmann::json events = nlohmann::json::array();  // improvements during its run: generation, fitness, origin
 };
 
 nlohmann::json strain_to_json(const Strain& s);
@@ -121,7 +122,7 @@ PreparedRun prepare_seeding(const Problem& primary, const EngineConfig& cfg);
 /// exactly Engine(problem, cfg).run().
 EvolutionResult run_evolution(const Problem& problem, const EngineConfig& cfg,
                               const std::function<void(const GenerationReport&)>& on_generation = {},
-                              PreparedRun* prepared_out = nullptr);
+                              PreparedRun* prepared_out = nullptr, const std::atomic<bool>* stop = nullptr);
 
 /// Wraps a problem and keeps scoring programs on parent problems too ("forgetting control").
 /// Training cases = primary cases followed by every parent's cases, rescaled so the mean case

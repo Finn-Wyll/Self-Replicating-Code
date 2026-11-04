@@ -32,6 +32,8 @@ add_library(adaptogen
   src/strain.cpp
   src/simplify.cpp
   src/plugin.cpp
+  src/report.cpp
+  src/mcp.cpp
   src/problems/formula.cpp
   src/problems/lists.cpp)
 target_include_directories(adaptogen PUBLIC include PRIVATE ${CMAKE_BINARY_DIR}/generated)
@@ -47,6 +49,7 @@ file(GENERATE OUTPUT ${CMAKE_BINARY_DIR}/generated/adaptogen/build_config.hpp CO
 #define ADAPTOGEN_JSON_INCLUDE_DIR \"${json_SOURCE_DIR}/include\"
 #define ADAPTOGEN_CXX_COMPILER \"${CMAKE_CXX_COMPILER}\"
 #define ADAPTOGEN_WORKER_PATH \"$<TARGET_FILE:adaptogen-worker>\"
+#define ADAPTOGEN_PROBLEMS_DIR \"${CMAKE_SOURCE_DIR}/problems\"
 ")
 target_compile_options(adaptogen PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic>)
 
@@ -64,6 +67,7 @@ if(ADAPTOGEN_BUILD_TESTS)
   enable_testing()
   add_executable(adaptogen-tests tests/tests.cpp)
   target_link_libraries(adaptogen-tests PRIVATE adaptogen)
+  target_include_directories(adaptogen-tests PRIVATE ${CMAKE_BINARY_DIR}/generated)
   add_dependencies(adaptogen-tests adaptogen-worker)
   target_compile_definitions(adaptogen-tests PRIVATE ADAPTOGEN_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
   add_test(NAME adaptogen-tests COMMAND adaptogen-tests)

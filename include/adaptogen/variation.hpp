@@ -27,8 +27,12 @@ struct VariationConfig {
 
 Instr random_instruction(const MachineSpec& spec, const VariationConfig& cfg, Rng& rng);
 Program random_program(const MachineSpec& spec, const VariationConfig& cfg, Rng& rng);
+enum class MutationKind { None, Insertion, Deletion, Point, Constant };
+const char* to_string(MutationKind k);
+
+/// One mutation event; returns what kind it was (None if it could not apply, e.g. at max length).
 /// num_outputs: how many output registers the problem reads (used by effective mutation).
-void mutate(Program& p, const MachineSpec& spec, const VariationConfig& cfg, Rng& rng, int num_outputs = 1);
+MutationKind mutate(Program& p, const MachineSpec& spec, const VariationConfig& cfg, Rng& rng, int num_outputs = 1);
 Program crossover(const Program& a, const Program& b, const VariationConfig& cfg, Rng& rng);
 
 /// Gene duplication: copy a segment of 1..max_segment instructions and insert the copy right

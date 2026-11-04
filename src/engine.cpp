@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <map>
+#include <memory>
 #include <chrono>
 #include <cmath>
 #include <numeric>
@@ -58,6 +60,9 @@ struct Individual {
     int parent_stagnation = 0;
     int stagnation = 0;
     std::size_t mother = static_cast<std::size_t>(-1);  // index of the mother in the previous population
+    // lineage: how this program came about
+    std::string origin;
+    std::shared_ptr<const Program> mother_program;
 };
 
 double median_of(std::vector<double>& v) {
@@ -191,6 +196,7 @@ EvolutionResult Engine::run() {
                                                                           static_cast<double>(P))));
     for (std::size_t i = 0; i < P; ++i) {
         Individual& ind = pop[i];
+        ind.origin = i < n_seeded ? (i < seeds_.size() ? "seeded" : "seeded + mutation") : "random";
         if (i < n_seeded) {
             ind.program = seeds_[i % seeds_.size()];
             if (i >= seeds_.size()) mutate(ind.program, spec_, var, rng, outputs);
@@ -283,20 +289,37 @@ EvolutionResult Engine::run() {
         child.parent_fitness = m.fitness;
         child.parent_stagnation = m.stagnation;
         child.program = m.program;
-        if (father != mother && rng.chance(var.p_crossover))
+        child.mother_program = std::make_shared<const Program>(m.program);
+        std::vector<std::string> how;
+        if (father != mother && rng.chance(var.p_crossover)) {
             child.program = crossover(m.program, pop[father].program, var, rng);
-        if (mech.duplication.enabled && rng.chance(mech.duplication.rate))
-            duplications += duplicate_segment(child.program, var, mech.duplication.max_segment, rng);
-        if (mech.transfer.enabled && donor != mother && rng.chance(mech.transfer.rate))
-            transfers += transfer_segment(child.program, pop[donor].program, var, mech.transfer.max_segment, rng);
-
+            how.push_back("crossover");
+        }
+        if (mech.duplication.enabled && rng.chance(mech.duplication.rate) &&
+            duplicate_segment(child.program, var, mech.duplication.max_segment, rng)) {
+            ++duplications;
+            how.push_back("gene duplication");
+        }
+        if (mech.transfer.enabled && donor != mother && rng.chance(mech.transfer.rate) &&
+            transfer_segment(child.program, pop[donor].program, var, mech.transfer.max_segment, rng)) {
+            ++transfers;
+            how.push_back("horizontal transfer");
+        }
+        std::map<std::string, int> kinds;
+        auto note = [&](MutationKind k) {
+            if (k != MutationKind::None) ++kinds[to_string(k)];
+        };
         if (!mech.hypermutation.enabled && !mech.stress.enabled) {
-            if (rng.chance(var.p_mutation)) mutate(child.program, spec_, var, rng, outputs);
+            if (rng.chance(var.p_mutation)) note(mutate(child.program, spec_, var, rng, outputs));
         } else {
             const double base = mech.hypermutation.enabled ? child.program.mutation_rate : var.p_mutation;
             const int k = rng.poisson(base * stress_multiplier(m.stagnation));
-            for (int i = 0; i < k; ++i) mutate(child.program, spec_, var, rng, outputs);
+            for (int i = 0; i < k; ++i) note(mutate(child.program, spec_, var, rng, outputs));
         }
+        for (const auto& [kind, count] : kinds) how.push_back(count > 1 ? std::to_string(count) + "x " + kind : kind);
+        std::string origin;
+        for (const auto& h : how) origin += (origin.empty() ? "" : " + ") + h;
+        child.origin = origin.empty() ? "unchanged copy" : origin;
         if (mech.hypermutation.enabled && rng.chance(mech.hypermutation.p_change))
             child.program.mutation_rate =
                 std::clamp(child.program.mutation_rate * std::exp(rng.normal() * mech.hypermutation.change_sigma),
@@ -360,6 +383,8 @@ EvolutionResult Engine::run() {
                 score_batch({&trial});
                 if (trial.fitness > ind.fitness + 1e-12) {
                     trial.stagnation = 0;
+                    trial.origin = "constant tuning";
+                    trial.mother_program = std::make_shared<const Program>(ind.program);
                     ind = std::move(trial);
                     ++tuned;
                 }
@@ -417,8 +442,19 @@ EvolutionResult Engine::run() {
             hall_of_fame = std::move(candidate);
             have_best = improved = true;
         }
-        if (improved) population_stagnation = 0;
-        else ++population_stagnation;
+        if (improved) {
+            population_stagnation = 0;
+            LineageEvent ev;
+            ev.generation = gen;
+            ev.fitness = hall_of_fame.fitness;
+            ev.origin = hall_of_fame.origin;
+            ev.has_mother = hall_of_fame.mother_program != nullptr;
+            if (ev.has_mother) ev.mother = *hall_of_fame.mother_program;
+            ev.champion = hall_of_fame.program;
+            result.lineage.push_back(std::move(ev));
+        } else {
+            ++population_stagnation;
+        }
         const Program& bp = hall_of_fame.program;
         const double Pd = static_cast<double>(pop.size());
 
@@ -450,7 +486,8 @@ EvolutionResult Engine::run() {
         const bool budget = (cfg_.max_program_evaluations > 0 &&
                              evaluations + static_cast<long>(P) > cfg_.max_program_evaluations) ||
                             (cfg_.max_case_evaluations > 0 && case_evaluations + next_cost > cfg_.max_case_evaluations);
-        if (solved || budget || gen + 1 >= cfg_.generations) break;
+        const bool cancelled = stop_ && stop_->load();
+        if (solved || budget || cancelled || gen + 1 >= cfg_.generations) break;
 
         // epsilon for lexicase = median absolute deviation of each case's scores
         build_matrix(pop);

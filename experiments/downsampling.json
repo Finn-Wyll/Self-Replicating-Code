@@ -1,0 +1,13 @@
+{
+  "description": "Section 6 of benchmarks/RESULTS.md: down-sampling vs the previous default at equal compute, on fresh seeds, with tree GP as a reference.",
+  "suite": "custom",
+  "runs": 20,
+  "seed_base": 9000,
+  "case_budget_gens": 100,
+  "reference": true,
+  "variants": {
+    "downsample-0.1": {"downsample": 0.1},
+    "downsample-0.05+const-tuning": {"downsample": 0.05, "constant_tuning": true}
+  },
+  "out": "benchmarks/improve-final"
+}

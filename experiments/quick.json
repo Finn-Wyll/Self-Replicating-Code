@@ -1,0 +1,10 @@
+{
+  "description": "A two-minute smoke test of the experiment runner.",
+  "suite": "custom",
+  "runs": 4,
+  "seed_base": 1,
+  "case_budget_gens": 30,
+  "targets": ["koza1", "list-sum"],
+  "variants": {"downsample-0.1": {"downsample": 0.1}},
+  "out": "experiment-quick"
+}

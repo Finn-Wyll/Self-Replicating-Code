@@ -295,7 +295,8 @@ std::vector<std::string> PluginProblem::parents() const {
 
 std::vector<std::pair<std::string, std::string>> PluginProblem::channel_maps() const {
     std::vector<std::pair<std::string, std::string>> out;
-    for (const auto& [k, v] : info_.value("channel_maps", json::object()).items()) out.emplace_back(k, v.get<std::string>());
+    const json maps = info_.value("channel_maps", json::object());  // must outlive the loop
+    for (const auto& [k, v] : maps.items()) out.emplace_back(k, v.get<std::string>());
     return out;
 }
 

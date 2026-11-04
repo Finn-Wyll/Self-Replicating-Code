@@ -11,7 +11,9 @@
 #include "adaptogen/analysis.hpp"
 #include "adaptogen/engine.hpp"
 #include "adaptogen/registry.hpp"
+#include "adaptogen/mcp.hpp"
 #include "adaptogen/plugin.hpp"
+#include "adaptogen/report.hpp"
 #include "adaptogen/serialize.hpp"
 #include "adaptogen/simplify.hpp"
 #include "adaptogen/strain.hpp"
@@ -30,6 +32,9 @@ usage:
   adaptogen show --program FILE [--all]       show a saved program and its scores
   adaptogen strains list|show|check|reindex   browse and inspect the strain bank (see below)
   adaptogen plugin new|header|build|validate|info   write problems as C++ plug-ins (see below)
+  adaptogen mcp [--workspace DIR] [--library DIR]   run as an MCP server (tools for Claude) on stdio
+  adaptogen export (--program FILE | --strain ID) [--name NAME] [-o FILE.hpp]
+                                              export an evolved program as standalone C++
 
 evolve options:
   --params JSON          problem parameters, e.g. '{"target":"koza1"}'
@@ -43,6 +48,8 @@ evolve options:
   --json                 machine-readable output: one JSON event per line
   --quiet                only print the final result
   --all                  also show non-effective code (introns)
+  --lineage FILE.md      write how the solution evolved: every improvement, what produced it
+                         and the code change
   --no-simplify          keep the raw evolved program (default: remove code that does not
                          change any training case's score, verified case by case)
 
@@ -59,6 +66,7 @@ strain bank (saved programs that can be revived on new problems):
   adaptogen strains show ID [--all]                     interface, behaviour and lineage
   adaptogen strains check ID --problem NAME [--params JSON] [--param K=V] [--map OLD=NEW]
   adaptogen strains simplify ID                         save a simplified new version (verified)
+  adaptogen strains lineage ID [-o FILE.md]             ancestry report: problems, scores, code changes
 
 plug-ins (new problems in C++, run in isolated worker processes; use as --problem plugin:FILE.cpp):
   adaptogen plugin new NAME [--from STRAIN]... [--rename STRAIN:CHANNEL=NEW]... [--dir DIR]
@@ -133,7 +141,7 @@ int cmd_list() {
 }
 
 int cmd_evolve(const std::vector<std::string>& args) {
-    std::string problem_name, out_path, csv_path, save_strain, strain_description;
+    std::string problem_name, out_path, csv_path, save_strain, strain_description, lineage_path;
     json params = json::object();
     EngineConfig cfg;
     cfg.seeding.library = default_library();
@@ -164,6 +172,7 @@ int cmd_evolve(const std::vector<std::string>& args) {
         else if (a == "--quiet") quiet = true;
         else if (a == "--all") show_all = true;
         else if (a == "--save-strain") save_strain = next();
+        else if (a == "--lineage") lineage_path = next();
         else if (a == "--description") strain_description = next();
         else if (a == "--seed-strain") seeding["strains"].push_back(next());
         else if (a == "--seed-parents") seed_parents = true;
@@ -264,6 +273,14 @@ int cmd_evolve(const std::vector<std::string>& args) {
     saved["problem"] = problem_spec;
     saved["config"] = config_to_json(cfg);
     if (do_simplify) saved["raw_program"] = program_to_json(spec, raw_program);
+    saved["lineage"] = json::array();
+    for (const auto& e : res.lineage)
+        saved["lineage"].push_back({{"generation", e.generation}, {"fitness", e.fitness}, {"origin", e.origin}});
+    if (!lineage_path.empty()) {
+        std::ofstream lf(lineage_path);
+        if (!lf) throw std::runtime_error("cannot write '" + lineage_path + "'");
+        lf << lineage_report(spec, problem->num_outputs(), res, problem->name());
+    }
     std::string strain_id;
     if (!save_strain.empty()) {
         std::vector<std::string> parents;
@@ -295,6 +312,8 @@ int cmd_evolve(const std::vector<std::string>& args) {
     }
     if (!strain_id.empty() && !json_out)
         std::printf("\nsaved strain %s in %s/\n", strain_id.c_str(), cfg.seeding.library.c_str());
+    if (!lineage_path.empty() && !json_out)
+        std::printf("lineage report (%zu improvements) written to %s\n", res.lineage.size(), lineage_path.c_str());
     return 0;
 }
 
@@ -422,6 +441,48 @@ int cmd_plugin(std::vector<std::string> args) {
     throw std::runtime_error("unknown plugin subcommand '" + sub + "'");
 }
 
+int cmd_export(const std::vector<std::string>& args) {
+    std::string program_file, strain_id, name, out_file, library = default_library();
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        auto next = [&]() -> const std::string& {
+            if (i + 1 >= args.size()) throw std::runtime_error(args[i] + " needs a value");
+            return args[++i];
+        };
+        if (args[i] == "--program") program_file = next();
+        else if (args[i] == "--strain") strain_id = next();
+        else if (args[i] == "--name") name = next();
+        else if (args[i] == "-o") out_file = next();
+        else if (args[i] == "--library") library = next();
+        else throw std::runtime_error("unknown option '" + args[i] + "'");
+    }
+    std::string code;
+    if (!strain_id.empty()) {
+        const Strain s = StrainLibrary(library).load(strain_id);
+        const MachineSpec spec = strain_machine(s);
+        code = export_cpp(spec, program_from_json(spec, s.program), s.num_outputs, name.empty() ? s.id : name,
+                          "strain " + s.id + (s.description.empty() ? "" : " (" + s.description + ")"));
+    } else if (!program_file.empty()) {
+        const json saved = read_json(program_file);
+        EngineConfig cfg;
+        if (saved.contains("config")) config_from_json(cfg, saved.at("config"));
+        const json& pj = saved.at("problem");
+        auto problem = make_problem(pj.at("name").get<std::string>(), pj.value("params", json::object()), pj.value("seed", cfg.seed));
+        const MachineSpec spec = make_machine(*problem, cfg);
+        code = export_cpp(spec, program_from_json(spec, saved.at("program")), problem->num_outputs(),
+                          name.empty() ? problem->name() : name, "evolved for " + problem->name());
+    } else {
+        throw std::runtime_error("export needs --program FILE or --strain ID");
+    }
+    if (out_file.empty()) std::cout << code;
+    else {
+        std::ofstream o(out_file);
+        if (!o) throw std::runtime_error("cannot write '" + out_file + "'");
+        o << code;
+        std::printf("wrote %s\n", out_file.c_str());
+    }
+    return 0;
+}
+
 int cmd_strains(std::vector<std::string> args) {
     if (args.empty()) throw std::runtime_error("usage: adaptogen strains list|show|check|reindex ...");
     const std::string sub = args[0];
@@ -446,6 +507,7 @@ int cmd_strains(std::vector<std::string> args) {
             if (eq == std::string::npos) throw std::runtime_error("--map expects OLD=NEW");
             map.emplace_back(kv.substr(0, eq), kv.substr(eq + 1));
         } else if (a == "--all") show_all = true;
+        else if (a == "-o") ++i;  // handled by the subcommand
         else if (!a.empty() && a[0] != '-' && id.empty()) id = a;
         else throw std::runtime_error("unknown option '" + a + "'");
     }
@@ -530,6 +592,19 @@ int cmd_strains(std::vector<std::string> args) {
                     problem->num_cases(Split::Train), id2.c_str());
         return 0;
     }
+    if (sub == "lineage") {
+        const std::string text = strain_lineage_report(lib, s.id);
+        std::string out_file;
+        for (std::size_t i = 0; i + 1 < args.size(); ++i)
+            if (args[i] == "-o") out_file = args[i + 1];
+        if (out_file.empty()) std::cout << text;
+        else {
+            std::ofstream o(out_file);
+            o << text;
+            std::printf("wrote %s\n", out_file.c_str());
+        }
+        return 0;
+    }
     if (sub == "check") {
         if (problem_name.empty()) throw std::runtime_error("strains check needs --problem NAME");
         auto problem = make_problem(problem_name, params, 1);
@@ -584,6 +659,18 @@ int main(int argc, char** argv) {
         if (cmd == "show") return cmd_show(args);
         if (cmd == "strains") return cmd_strains(args);
         if (cmd == "plugin") return cmd_plugin(args);
+        if (cmd == "export") return cmd_export(args);
+        if (cmd == "mcp") {
+            std::string workspace = ".", library = default_library();
+            for (std::size_t i = 0; i + 1 < args.size(); i += 2) {
+                if (args[i] == "--workspace") workspace = args[i + 1];
+                else if (args[i] == "--library") library = args[i + 1];
+                else throw std::runtime_error("unknown option '" + args[i] + "'");
+            }
+            if (!std::filesystem::is_directory(workspace)) throw std::runtime_error("workspace '" + workspace + "' is not a folder");
+            McpServer server(workspace, std::filesystem::absolute(library));
+            return server.serve(std::cin, std::cout);
+        }
         std::cerr << "unknown command '" << cmd << "'\n\n" << kUsage;
         return 1;
     } catch (const std::exception& e) {

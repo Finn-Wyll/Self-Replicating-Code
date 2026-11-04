@@ -12,11 +12,15 @@
 #include "adaptogen/problems/lists.hpp"
 #include "adaptogen/registry.hpp"
 #include "adaptogen/serialize.hpp"
+#include "adaptogen/build_config.hpp"
+#include "adaptogen/mcp.hpp"
 #include "adaptogen/plugin.hpp"
+#include "adaptogen/report.hpp"
 #include "adaptogen/simplify.hpp"
 #include "adaptogen/strain.hpp"
 
 #include <filesystem>
+#include <fstream>
 
 using namespace adaptogen;
 
@@ -763,6 +767,110 @@ TEST(base_header_merges_and_detects_conflicts) {
     const std::string r = generate_base_header({a, c}, "Renamed", {{"c-v1:list.length", "c.length"}});
     CHECK(r.find("kInheritedChannels = 3") != std::string::npos);
     CHECK(r.find("{\"c-v1:list.length\", \"c.length\"}") != std::string::npos);
+}
+
+TEST(exported_cpp_matches_the_vm_exactly) {
+    MachineSpec s;
+    s.ops = core_ops();
+    s.channels = {{"x", ChannelKind::Sensor, 0, "", ""}, {"item", ChannelKind::Sensor, 1, "", ""}, {"push", ChannelKind::Action, 2, "", ""}};
+    s.limits.max_steps = 40;  // low, so the step limit is exercised
+    s.limits.max_loop_iterations = 7;
+    s.finalize();
+    struct Env : Environment {
+        double sense(int ch, const double* a, int n) override { return ch + 0.5 * (n > 0 ? a[0] : 0) - 0.25 * (n > 1 ? a[1] : 0) + 1.5; }
+        double act(int ch, const double* a, int n) override { return 0.5 * (n > 0 ? a[0] : 0) + ch - (n > 1 ? a[1] : 0); }
+    };
+    VariationConfig v;
+    v.init_min_length = 10;
+    v.init_max_length = 60;
+    Rng rng(21);
+    std::vector<Program> progs;
+    std::string code = "#include <cstdio>\n";
+    for (int k = 0; k < 40; ++k) {
+        progs.push_back(random_program(s, v, rng));
+        std::string one = export_cpp(s, progs.back(), 1, "p" + std::to_string(k));
+        one.replace(one.find("#pragma once\n"), 13, "");  // several headers in one test file
+        code += one;
+    }
+    code += "struct E {\n";
+    code += "    template <class B> struct Env : B {\n";
+    code += "        double sense(int ch, const double* a, int n) override { return ch + 0.5 * (n > 0 ? a[0] : 0) - 0.25 * (n > 1 ? a[1] : 0) + 1.5; }\n";
+    code += "        double act(int ch, const double* a, int n) override { return 0.5 * (n > 0 ? a[0] : 0) + ch - (n > 1 ? a[1] : 0); }\n";
+    code += "    };\n};\nint main() {\n";
+    for (int k = 0; k < 40; ++k) {
+        const std::string ns = "p" + std::to_string(k);
+        code += "    { E::Env<" + ns + "::Environment> env; double r[8] = {}; " + ns + "::run(env, r); for (double x : r) std::printf(\"%.17g \", x); std::printf(\"\\n\"); }\n";
+    }
+    code += "}\n";
+    const auto dir = std::filesystem::temp_directory_path() / "adaptogen-export-test";
+    std::filesystem::create_directories(dir);
+    { std::ofstream(dir / "t.cpp") << code; }
+    const std::string cmd = std::string("'") + ADAPTOGEN_CXX_COMPILER + "' -std=c++20 -O2 -o '" + (dir / "t").string() + "' '" +
+                            (dir / "t.cpp").string() + "' 2>&1";
+    CHECK(std::system(cmd.c_str()) == 0);
+    FILE* out = popen((dir / "t").string().c_str(), "r");
+    CHECK(out != nullptr);
+    int mismatches = 0, step_limited = 0;
+    for (int k = 0; k < 40 && out; ++k) {
+        Env env;
+        std::array<double, 8> r{};
+        const RunStats st = run(s, progs[static_cast<std::size_t>(k)], env, r);
+        step_limited += st.step_limit_hit;
+        for (int j = 0; j < 8; ++j) {
+            double x = 0;
+            if (std::fscanf(out, "%lf", &x) != 1) { ++mismatches; break; }
+            if (!(x == r[static_cast<std::size_t>(j)] || std::fabs(x - r[static_cast<std::size_t>(j)]) <= 1e-12 * (1 + std::fabs(x)))) ++mismatches;
+        }
+    }
+    if (out) pclose(out);
+    CHECK(mismatches == 0);
+    CHECK(step_limited > 0);  // some programs really hit the limit, and still match
+}
+
+TEST(lineage_records_improvements_and_reports) {
+    auto problem = FormulaProblem::from_params({{"target", "koza1"}}, 3);
+    EngineConfig cfg;
+    cfg.seed = 3;
+    cfg.population = 100;
+    cfg.generations = 40;
+    Engine e(*problem, cfg);
+    const auto res = e.run();
+    CHECK(!res.lineage.empty());
+    CHECK(res.lineage.front().origin == "random");
+    for (std::size_t i = 1; i < res.lineage.size(); ++i) CHECK(res.lineage[i].fitness > res.lineage[i - 1].fitness);
+    CHECK(res.lineage.back().champion == res.best);
+    const std::string md = lineage_report(e.machine(), 1, res, "koza1");
+    CHECK(md.find("```diff") != std::string::npos && md.find("## Final program") != std::string::npos);
+    const std::string d = program_diff(e.machine(), Program{{I(Op::Sense, 0)}}, e.machine(), Program{{I(Op::Sense, 0), I(Op::Mul, 0, 0, 0)}}, 1);
+    CHECK(d.find("+ r0 = r0 * r0") != std::string::npos && d.find("  r0 = x") != std::string::npos);
+}
+
+TEST(mcp_server_speaks_json_rpc) {
+    const auto ws = std::filesystem::temp_directory_path() / "adaptogen-mcp-test";
+    std::filesystem::remove_all(ws);
+    std::filesystem::create_directories(ws);
+    McpServer server(ws, ws / "strains");
+    using nlohmann::json;
+    const json init = server.handle(json::parse(R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}})"));
+    CHECK(init.at("result").at("serverInfo").at("name") == "adaptogen");
+    CHECK(server.handle(json::parse(R"({"jsonrpc":"2.0","method":"notifications/initialized"})")).is_null());
+    const json tools = server.handle(json::parse(R"({"jsonrpc":"2.0","id":2,"method":"tools/list"})"));
+    CHECK(tools.at("result").at("tools").size() >= 15);
+    const json call = server.handle(json::parse(
+        R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"describe_problem","arguments":{"problem":"list","params":{"task":"max"}}}})"));
+    CHECK(!call.at("result").at("isError").get<bool>());
+    CHECK(call.at("result").at("content")[0].at("text").get<std::string>().find("list.item") != std::string::npos);
+    const json bad = server.handle(json::parse(
+        R"({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"plugin_write","arguments":{"path":"../x.cpp","content":""}}})"));
+    CHECK(bad.at("result").at("isError").get<bool>());  // outside the workspace
+    const json job = server.handle(json::parse(
+        R"({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"evolve_start","arguments":{"problem":"formula","params":{"target":"koza1"},"config":{"population":50,"generations":20}}}})"));
+    CHECK(!job.at("result").at("isError").get<bool>());
+    const json done = server.handle(json::parse(
+        R"({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"evolve_status","arguments":{"job_id":"job-1","wait_seconds":60}}})"));
+    const json st = json::parse(done.at("result").at("content")[0].at("text").get<std::string>());
+    CHECK(st.at("state") == "done" && st.at("result").contains("pseudocode"));
+    CHECK(server.handle(json::parse(R"({"jsonrpc":"2.0","id":7,"method":"nope"})")).at("error").at("code") == -32601);
 }
 
 TEST(seeding_config_round_trip) {

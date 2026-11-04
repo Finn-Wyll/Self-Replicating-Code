@@ -78,9 +78,9 @@ std::size_t pick(const std::vector<bool>& mask, bool effective, Rng& rng) {
 
 }  // namespace
 
-void mutate(Program& p, const MachineSpec& spec, const VariationConfig& cfg, Rng& rng, int num_outputs) {
+MutationKind mutate(Program& p, const MachineSpec& spec, const VariationConfig& cfg, Rng& rng, int num_outputs) {
     const double total = cfg.w_insert + cfg.w_delete + cfg.w_point + cfg.w_constant;
-    if (total <= 0) return;
+    if (total <= 0) return MutationKind::None;
     double u = rng.uniform() * total;
     auto& code = p.code;
     const int max_len = std::max(1, cfg.max_length);
@@ -88,7 +88,7 @@ void mutate(Program& p, const MachineSpec& spec, const VariationConfig& cfg, Rng
     std::vector<bool> mask = eff ? effective_mask(spec, p, num_outputs) : std::vector<bool>(code.size(), true);
 
     if ((u -= cfg.w_insert) < 0) {
-        if (static_cast<int>(code.size()) >= max_len) return;
+        if (static_cast<int>(code.size()) >= max_len) return MutationKind::None;
         const std::size_t pos = rng.below(code.size() + 1);
         Instr in = random_instruction(spec, cfg, rng);
         if (eff && op_info(in.op).writes_dst && in.op != Op::Act) {
@@ -97,15 +97,16 @@ void mutate(Program& p, const MachineSpec& spec, const VariationConfig& cfg, Rng
             canonicalize(in);
         }
         code.insert(code.begin() + static_cast<long>(pos), in);
-        return;
+        return MutationKind::Insertion;
     }
     if ((u -= cfg.w_delete) < 0) {
-        if (code.size() > 1) code.erase(code.begin() + static_cast<long>(pick(mask, eff, rng)));
-        return;
+        if (code.size() <= 1) return MutationKind::None;
+        code.erase(code.begin() + static_cast<long>(pick(mask, eff, rng)));
+        return MutationKind::Deletion;
     }
     if (code.empty()) {
         code.push_back(random_instruction(spec, cfg, rng));
-        return;
+        return MutationKind::Insertion;
     }
     if ((u -= cfg.w_point) < 0) {
         Instr& in = code[pick(mask, eff, rng)];
@@ -122,7 +123,7 @@ void mutate(Program& p, const MachineSpec& spec, const VariationConfig& cfg, Rng
                 else in.b = reg(spec, rng);
         }
         canonicalize(in);
-        return;
+        return MutationKind::Point;
     }
     // constant mutation: nudge one (effective) constant; falls back to a point mutation if none exist
     std::vector<std::size_t> consts;
@@ -130,9 +131,21 @@ void mutate(Program& p, const MachineSpec& spec, const VariationConfig& cfg, Rng
         if (code[i].op == Op::Const && (!eff || mask[i])) consts.push_back(i);
     if (consts.empty()) {
         code[pick(mask, eff, rng)] = random_instruction(spec, cfg, rng);
-        return;
+        return MutationKind::Point;
     }
     code[consts[rng.below(consts.size())]].imm += rng.normal() * cfg.constant_sigma;
+    return MutationKind::Constant;
+}
+
+const char* to_string(MutationKind k) {
+    switch (k) {
+        case MutationKind::None: return "none";
+        case MutationKind::Insertion: return "insertion";
+        case MutationKind::Deletion: return "deletion";
+        case MutationKind::Point: return "point mutation";
+        case MutationKind::Constant: return "constant change";
+    }
+    return "?";
 }
 
 Program crossover(const Program& a, const Program& b, const VariationConfig& cfg, Rng& rng) {

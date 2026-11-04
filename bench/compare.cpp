@@ -143,7 +143,56 @@ std::vector<Benchmark> all_benchmarks() {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+// An experiment file is a JSON description of a comparison; it expands into the same options as
+// the command line, so both always mean the same thing.
+std::vector<std::string> expand_experiment(const std::string& path) {
+    std::ifstream in(path);
+    if (!in) throw std::runtime_error("cannot open experiment '" + path + "'");
+    const nlohmann::json j = nlohmann::json::parse(in);
+    std::vector<std::string> a;
+    auto scalar = [](const nlohmann::json& v) { return v.is_string() ? v.get<std::string>() : v.dump(); };
+    for (const auto& [key, v] : j.items()) {
+        if (key == "description") continue;  // free text for people
+        if (key == "suite") a.insert(a.end(), {"--suite", scalar(v)});
+        else if (key == "runs") a.insert(a.end(), {"--runs", scalar(v)});
+        else if (key == "population") a.insert(a.end(), {"--population", scalar(v)});
+        else if (key == "generations") a.insert(a.end(), {"--generations", scalar(v)});
+        else if (key == "threads") a.insert(a.end(), {"--threads", scalar(v)});
+        else if (key == "seed_base") a.insert(a.end(), {"--seed-base", scalar(v)});
+        else if (key == "case_budget_gens") a.insert(a.end(), {"--case-budget-gens", scalar(v)});
+        else if (key == "out") a.insert(a.end(), {"--out", scalar(v)});
+        else if (key == "reference") { if (v.get<bool>()) a.push_back("--reference"); }
+        else if (key == "validation") { if (!v.get<bool>()) a.push_back("--no-validation"); }
+        else if (key == "set") a.insert(a.end(), {"--set", v.dump()});
+        else if (key == "targets") for (const auto& t : v) a.insert(a.end(), {"--target", scalar(t)});
+        else if (key == "algorithms") for (const auto& t : v) a.insert(a.end(), {"--algorithm", scalar(t)});
+        else if (key == "plugin_targets") for (const auto& [n, p] : v.items()) a.insert(a.end(), {"--plugin-target", n + "=" + scalar(p)});
+        else if (key == "variants") for (const auto& [n, o] : v.items()) a.insert(a.end(), {"--variant", n + "=" + o.dump()});
+        else throw std::runtime_error("unknown key '" + key + "' in experiment " + path);
+    }
+    return a;
+}
+
+int main(int argc_in, char** argv_in) {
+    // Expand --experiment FILE into ordinary options.
+    std::vector<std::string> args;
+    try {
+        for (int i = 0; i < argc_in; ++i) {
+            if (std::string(argv_in[i]) == "--experiment" && i + 1 < argc_in) {
+                const auto more = expand_experiment(argv_in[++i]);
+                args.insert(args.end(), more.begin(), more.end());
+            } else {
+                args.push_back(argv_in[i]);
+            }
+        }
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "error: %s\n", e.what());
+        return 1;
+    }
+    std::vector<char*> argv_vec;
+    for (auto& s : args) argv_vec.push_back(s.data());
+    const int argc = static_cast<int>(argv_vec.size());
+    char** argv = argv_vec.data();
     int runs = 20, population = 500, generations = 100, threads = 0;
     std::uint64_t seed_base = 1000;
     int case_budget_gens = 0;  // >0: budget in case evaluations = population x N x training cases
@@ -193,6 +242,7 @@ int main(int argc, char** argv) {
                          "         [--case-budget-gens N]  (budget = population x N x training cases, in case evaluations)\n"
                          "         [--reference]  (custom suite: add tree GP on formula benchmarks)\n"
                          "         [--plugin-target NAME=PATH]...  (plug-in problems as extra benchmarks)\n"
+                         "         [--experiment FILE.json]  (the same options as a JSON file; see experiments/)\n"
                          "suites: baselines, mechanisms, custom (baseline + --variant entries)\n"
                          "targets: koza1 nguyen5 nguyen7 nguyen10 pagie1 keijzer6 list-sum list-max list-count_positive\n");
             return 1;

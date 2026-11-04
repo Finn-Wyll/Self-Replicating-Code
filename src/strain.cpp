@@ -116,7 +116,8 @@ json strain_to_json(const Strain& s) {
           {"problem", s.problem},
           {"config", s.config},
           {"generations", s.generations},
-          {"program_evaluations", s.program_evaluations}}},
+          {"program_evaluations", s.program_evaluations},
+          {"events", s.events}}},
         {"scores", {{"train", s.train_metrics}, {"test", s.test_metrics}, {"solved_test", s.solved_test}}},
     };
 }
@@ -147,6 +148,7 @@ Strain strain_from_json(const json& j) {
     s.config = lin.value("config", json::object());
     s.generations = lin.value("generations", 0);
     s.program_evaluations = lin.value("program_evaluations", 0L);
+    s.events = lin.value("events", json::array());
     const json& sc = j.value("scores", json::object());
     s.train_metrics = sc.value("train", json::object());
     s.test_metrics = sc.value("test", json::object());
@@ -180,6 +182,8 @@ Strain make_strain(const std::string& name, const std::string& description, cons
     s.train_metrics = metrics_json(result.train_metrics);
     s.test_metrics = metrics_json(result.test_metrics);
     s.solved_test = result.solved_test;
+    for (const auto& e : result.lineage)
+        s.events.push_back({{"generation", e.generation}, {"fitness", e.fitness}, {"origin", e.origin}});
     return s;
 }
 
@@ -397,9 +401,11 @@ PreparedRun prepare_seeding(const Problem& primary, const EngineConfig& cfg) {
 }
 
 EvolutionResult run_evolution(const Problem& problem, const EngineConfig& cfg,
-                              const std::function<void(const GenerationReport&)>& on_generation, PreparedRun* prepared_out) {
+                              const std::function<void(const GenerationReport&)>& on_generation, PreparedRun* prepared_out,
+                              const std::atomic<bool>* stop) {
     PreparedRun prepared = prepare_seeding(problem, cfg);
     Engine engine(prepared.problem(problem), cfg);
+    engine.set_stop_flag(stop);
     if (!prepared.seeds.empty()) engine.set_seed_programs(prepared.seeds, cfg.seeding.random_fraction);
     if (on_generation) engine.on_generation(on_generation);
     EvolutionResult result = engine.run();

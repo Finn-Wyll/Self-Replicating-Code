@@ -1,0 +1,18 @@
+{
+  "description": "Built-in everyday problems (plug-ins): the default engine vs a variant, at equal compute. Edit the variants to test your own ideas.",
+  "suite": "custom",
+  "runs": 10,
+  "seed_base": 11000,
+  "generations": 1000,
+  "set": {"downsample": 0.1},
+  "plugin_targets": {
+    "scheduling": "problems/scheduling.cpp",
+    "errands": "problems/errands.cpp",
+    "packing": "problems/packing.cpp",
+    "energy": "problems/energy.cpp"
+  },
+  "variants": {
+    "transfer-0.05": {"downsample": 0.1, "mechanisms": {"transfer": {"enabled": true, "rate": 0.05}}}
+  },
+  "out": "benchmarks/everyday"
+}
