@@ -1,0 +1,222 @@
+#include "adaptogen/serialize.hpp"
+
+#include <stdexcept>
+
+#include "adaptogen/analysis.hpp"
+
+namespace adaptogen {
+
+using nlohmann::json;
+
+json program_to_json(const MachineSpec& spec, const Program& p) {
+    json code = json::array();
+    for (const Instr& in : p.code) {
+        json j;
+        j["op"] = std::string(op_info(in.op).name);
+        switch (in.op) {
+            case Op::Nop: break;
+            case Op::Const: j["dst"] = in.dst; j["imm"] = in.imm; break;
+            case Op::IfLt: case Op::IfGe: case Op::IfEq: j["a"] = in.a; j["b"] = in.b; break;
+            case Op::Loop: j["dst"] = in.dst; j["a"] = in.a; j["body"] = in.c; break;
+            case Op::Sense:
+            case Op::Act: {
+                j["dst"] = in.dst;
+                j["channel"] = in.channel < spec.channels.size() ? spec.channels[in.channel].name : "";
+                j["args"] = json::array({in.a, in.b, in.c});
+                break;
+            }
+            default:
+                j["dst"] = in.dst;
+                j["a"] = in.a;
+                if (op_info(in.op).sources >= 2) j["b"] = in.b;
+        }
+        code.push_back(std::move(j));
+    }
+    return json{{"format", "adaptogen-program/1"}, {"registers", spec.num_registers}, {"code", code}};
+}
+
+Program program_from_json(const MachineSpec& spec, const json& j) {
+    Program p;
+    const int R = spec.num_registers;
+    auto reg = [&](const json& x, const char* key) -> std::uint8_t {
+        if (!x.contains(key)) return 0;
+        int v = x.at(key).get<int>() % R;
+        return static_cast<std::uint8_t>(v < 0 ? v + R : v);
+    };
+    for (const json& x : j.at("code")) {
+        Instr in;
+        const std::string name = x.at("op").get<std::string>();
+        auto op = op_from_name(name);
+        if (!op) throw std::runtime_error("unknown op '" + name + "'");
+        in.op = *op;
+        in.dst = reg(x, "dst");
+        in.a = reg(x, "a");
+        in.b = reg(x, "b");
+        if (x.contains("imm")) in.imm = x.at("imm").get<double>();
+        if (in.op == Op::Loop) in.c = static_cast<std::uint8_t>(std::max(1, x.value("body", 1)));
+        if (in.op == Op::Sense || in.op == Op::Act) {
+            const std::string ch = x.value("channel", "");
+            const auto want = in.op == Op::Sense ? ChannelKind::Sensor : ChannelKind::Action;
+            bool found = false;
+            for (std::size_t k = 0; k < spec.channels.size(); ++k)
+                if (spec.channels[k].name == ch && spec.channels[k].kind == want) {
+                    in.channel = static_cast<std::uint16_t>(k);
+                    found = true;
+                }
+            if (x.contains("args")) {
+                const auto& args = x.at("args");
+                std::uint8_t* f[3] = {&in.a, &in.b, &in.c};
+                for (std::size_t k = 0; k < 3 && k < args.size(); ++k) {
+                    int v = args[k].get<int>() % R;
+                    *f[k] = static_cast<std::uint8_t>(v < 0 ? v + R : v);
+                }
+            }
+            if (!found) in = Instr{};  // pseudogene: the channel does not exist here
+        }
+        canonicalize(in);
+        p.code.push_back(in);
+    }
+    return p;
+}
+
+namespace {
+std::vector<Op> ops_from_json(const json& j) {
+    if (j.is_string()) {
+        const auto s = j.get<std::string>();
+        if (s == "core") return core_ops();
+        if (s == "classic") return classic_regression_ops();
+        throw std::runtime_error("ops must be \"core\", \"classic\" or a list of op names");
+    }
+    std::vector<Op> ops;
+    for (const auto& x : j) {
+        auto op = op_from_name(x.get<std::string>());
+        if (!op || *op == Op::Sense || *op == Op::Act || *op == Op::Nop)
+            throw std::runtime_error("invalid op in config: " + x.get<std::string>());
+        ops.push_back(*op);
+    }
+    return ops;
+}
+}  // namespace
+
+json config_to_json(const EngineConfig& c) {
+    json ops = json::array();
+    for (Op op : c.ops) ops.push_back(std::string(op_info(op).name));
+    const auto& v = c.variation;
+    return json{
+        {"seed", c.seed},
+        {"population", c.population},
+        {"generations", c.generations},
+        {"elitism", c.elitism},
+        {"selection", to_string(c.selection)},
+        {"tournament_size", c.tournament_size},
+        {"registers", c.num_registers},
+        {"ops", ops},
+        {"max_steps", c.limits.max_steps},
+        {"max_loop_iterations", c.limits.max_loop_iterations},
+        {"max_loop_body", c.limits.max_loop_body},
+        {"const_min", c.const_min},
+        {"const_max", c.const_max},
+        {"length_cost", c.length_cost},
+        {"time_cost", c.time_cost},
+        {"threads", c.threads},
+        {"stop_when_solved", c.stop_when_solved},
+        {"max_program_evaluations", c.max_program_evaluations},
+        {"variation",
+         {{"init_min_length", v.init_min_length},
+          {"init_max_length", v.init_max_length},
+          {"max_length", v.max_length},
+          {"sense_weight", v.sense_weight},
+          {"act_weight", v.act_weight},
+          {"p_crossover", v.p_crossover},
+          {"p_mutation", v.p_mutation},
+          {"w_insert", v.w_insert},
+          {"w_delete", v.w_delete},
+          {"w_point", v.w_point},
+          {"w_constant", v.w_constant},
+          {"constant_sigma", v.constant_sigma},
+          {"effective_mutation", v.effective_mutation}}},
+    };
+}
+
+void config_from_json(EngineConfig& c, const json& j) {
+    for (const auto& [key, val] : j.items()) {
+        if (key == "seed") c.seed = val.get<std::uint64_t>();
+        else if (key == "population") c.population = val.get<int>();
+        else if (key == "generations") c.generations = val.get<int>();
+        else if (key == "elitism") c.elitism = val.get<int>();
+        else if (key == "selection") {
+            const auto s = val.get<std::string>();
+            if (s == "tournament") c.selection = SelectionMethod::Tournament;
+            else if (s == "lexicase") c.selection = SelectionMethod::Lexicase;
+            else throw std::runtime_error("selection must be tournament or lexicase");
+        } else if (key == "tournament_size") c.tournament_size = val.get<int>();
+        else if (key == "registers") c.num_registers = val.get<int>();
+        else if (key == "ops") c.ops = ops_from_json(val);
+        else if (key == "max_steps") c.limits.max_steps = val.get<int>();
+        else if (key == "max_loop_iterations") c.limits.max_loop_iterations = val.get<int>();
+        else if (key == "max_loop_body") c.limits.max_loop_body = val.get<int>();
+        else if (key == "const_min") c.const_min = val.get<double>();
+        else if (key == "const_max") c.const_max = val.get<double>();
+        else if (key == "length_cost") c.length_cost = val.get<double>();
+        else if (key == "time_cost") c.time_cost = val.get<double>();
+        else if (key == "threads") c.threads = val.get<int>();
+        else if (key == "stop_when_solved") c.stop_when_solved = val.get<bool>();
+        else if (key == "max_program_evaluations") c.max_program_evaluations = val.get<long>();
+        else if (key == "variation") {
+            auto& v = c.variation;
+            for (const auto& [k, x] : val.items()) {
+                if (k == "init_min_length") v.init_min_length = x.get<int>();
+                else if (k == "init_max_length") v.init_max_length = x.get<int>();
+                else if (k == "max_length") v.max_length = x.get<int>();
+                else if (k == "sense_weight") v.sense_weight = x.get<double>();
+                else if (k == "act_weight") v.act_weight = x.get<double>();
+                else if (k == "p_crossover") v.p_crossover = x.get<double>();
+                else if (k == "p_mutation") v.p_mutation = x.get<double>();
+                else if (k == "w_insert") v.w_insert = x.get<double>();
+                else if (k == "w_delete") v.w_delete = x.get<double>();
+                else if (k == "w_point") v.w_point = x.get<double>();
+                else if (k == "w_constant") v.w_constant = x.get<double>();
+                else if (k == "constant_sigma") v.constant_sigma = x.get<double>();
+                else if (k == "effective_mutation") v.effective_mutation = x.get<bool>();
+                else throw std::runtime_error("unknown variation key '" + k + "'");
+            }
+        } else
+            throw std::runtime_error("unknown config key '" + key + "'");
+    }
+}
+
+namespace {
+json metrics_json(const std::vector<Metric>& ms) {
+    json j = json::object();
+    for (const auto& m : ms) j[m.name] = m.value;
+    return j;
+}
+}  // namespace
+
+json report_to_json(const GenerationReport& r) {
+    return json{{"event", "generation"},
+                {"generation", r.generation},
+                {"program_evaluations", r.program_evaluations},
+                {"seconds", r.seconds},
+                {"best_fitness", r.best_fitness},
+                {"mean_fitness", r.mean_fitness},
+                {"best_length", r.best_length},
+                {"best_effective_length", r.best_effective_length},
+                {"mean_length", r.mean_length},
+                {"best_train_metrics", metrics_json(r.best_train_metrics)}};
+}
+
+json result_to_json(const MachineSpec& spec, const EvolutionResult& r) {
+    return json{{"event", "result"},
+                {"generations", r.generations},
+                {"program_evaluations", r.program_evaluations},
+                {"seconds", r.seconds},
+                {"best_fitness", r.best_fitness},
+                {"solved_train", r.solved_train},
+                {"solved_test", r.solved_test},
+                {"train_metrics", metrics_json(r.train_metrics)},
+                {"test_metrics", metrics_json(r.test_metrics)},
+                {"program", program_to_json(spec, r.best)}};
+}
+
+}  // namespace adaptogen
