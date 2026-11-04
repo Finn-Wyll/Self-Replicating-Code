@@ -36,6 +36,14 @@ struct Algorithm {
     bool formula_only = false;
 };
 
+// Quote a CSV field if it contains a comma, quote or newline (RFC 4180).
+std::string csv_field(const std::string& s) {
+    if (s.find_first_of(",\"\n") == std::string::npos) return s;
+    std::string out = "\"";
+    for (char c : s) out += c == '"' ? std::string("\"\"") : std::string(1, c);
+    return out + "\"";
+}
+
 double median(std::vector<double> v) {
     if (v.empty()) return 0;
     std::sort(v.begin(), v.end());
@@ -238,7 +246,7 @@ int main(int argc, char** argv) {
                 auto problem = bench.make(cfg.seed);
                 results[r] = algo.run(*problem, cfg);
                 std::lock_guard<std::mutex> lock(mu);
-                raw << bench.name << ',' << algo.name << ',' << r << ',' << cfg.seed << ',' << results[r].solved_test << ','
+                raw << csv_field(bench.name) << ',' << csv_field(algo.name) << ',' << r << ',' << cfg.seed << ',' << results[r].solved_test << ','
                     << results[r].test_primary << ',' << results[r].program_evaluations << ',' << results[r].seconds << ','
                     << results[r].size << '\n';
             });

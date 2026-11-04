@@ -253,3 +253,51 @@ population random. Table: [transfer.md](transfer.md), data: [transfer.csv](trans
    selection discards it early. Simplifying strains before saving (removing dead and redundant
    code, which is stage 6's simplifier) is the most promising fix, together with a
    higher `random_fraction` when the target task differs.
+
+## 5. Simplified strains transfer better
+
+Section 4 suggested bloated donors were the limit. A **verified simplifier** now removes code as
+long as no training case scores worse, checked case by case. It reduced the five sum donors from
+128/28/61/34/32 to **5/9/7/4/7 instructions**, all still perfect on the unseen test lists.
+Simplified versions are saved as new strain versions (`list-sum-v6`..`v10`) whose lineage points
+to the originals. The same transfer experiment was then rerun with raw and simplified donors on
+**identical fresh seeds** (7000+), 20 runs each. Table: [transfer-simplified.md](transfer-simplified.md),
+data: [transfer-simplified.csv](transfer-simplified.csv).
+
+| Starting point → list-max | solved (of 20) | median test accuracy |
+|---|---|---|
+| from scratch (baseline) | 3 | 0.085 |
+| one **raw** sum strain | 0 | 0.053 |
+| one **simplified** sum strain | **7** | 0.163 |
+| one simplified strain, 50% random start | 2 | 0.205 |
+| five **raw** sum strains | 1 | 0.068 |
+| five **simplified** sum strains | 5 | **0.818** |
+| control: unrelated koza1 strain | 0 | 0.028 |
+
+Head-to-head (Fisher exact on solved counts; Mann–Whitney on the accuracy distributions):
+
+| Comparison | solved | accuracy |
+|---|---|---|
+| one simplified vs one raw strain | 7 vs 0, **p = 0.008** | **p = 0.032** |
+| five simplified vs five raw strains | 5 vs 1, p = 0.18 | **p = 0.007** |
+| five simplified strains vs scratch | 5 vs 3, p = 0.70 | **p = 0.021** |
+| one simplified strain vs scratch | 7 vs 3, p = 0.27 | p = 0.20 |
+
+### Findings
+
+1. **Simplification is what makes transfer work.** The same donor, simplified, went from 0/20 to
+   7/20 on a *different* task (p = 0.008). Raw donors were no better than scratch, sometimes worse.
+   Clean code leaves the reusable part (the loop over the list) exposed, so a few mutations can
+   repurpose it.
+2. **Several simplified parents give the most reliable improvement.** Seeding from all five
+   simplified sum strains raised median test accuracy on list-max from 0.085 (scratch) to 0.82
+   (p = 0.021), though exact solutions (5/20) were not significantly more frequent than from
+   scratch. Several distinct but clean solutions give evolution varied starting points. With raw
+   donors, the same multiple-inheritance setup failed (section 4).
+3. **Raising the random fraction to 50% did not help** here (2/20). The seeded code is the useful
+   part; diluting it costs more than the extra diversity gains.
+4. **count_positive is still out of reach** (0/20 for every variant). It needs a new conditional
+   inside the loop (`if item > 0`) plus a constant, which is a bigger step than repurposing `+`.
+   Stepping-stone strains (e.g. a "count items" strain) or a longer budget are the next things to try.
+5. **Practical consequence:** strains are now simplified by default when saved from `evolve`, and
+   `strains simplify ID` cleans up older ones.

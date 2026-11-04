@@ -188,8 +188,10 @@ can repurpose) and what is new. It warns when a matched channel's units or descr
 | `--library DIR` | Library folder (default `$ADAPTOGEN_LIBRARY` or `./strains`) |
 
 **Does it help?** On the same task with new data, reviving a strain solved every run in the first
-generation at 1% of the cost of starting from scratch. Transfer to a *different* task
-(sum → max) helped only slightly so far. See [benchmarks/RESULTS.md](benchmarks/RESULTS.md) §4.
+generation at 1% of the cost of starting from scratch. For a *different* task (sum → max),
+**simplified** strains transfer significantly better than raw ones (7/20 vs 0/20 solved, p = 0.008).
+Five simplified parents raised median test accuracy from 0.09 to 0.82. See
+[benchmarks/RESULTS.md](benchmarks/RESULTS.md) §4–5.
 
 The same settings live in the config's `"seeding"` section, so a JSON config fully describes a
 seeded run. Generated C++ base classes from strains (deriving new problems from a strain's
