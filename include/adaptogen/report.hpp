@@ -29,4 +29,21 @@ std::string strain_lineage_report(const StrainLibrary& library, const std::strin
 std::string export_cpp(const MachineSpec& spec, const Program& program, int num_outputs, const std::string& name,
                        const std::string& comment = "");
 
+enum class ExportLanguage { Cpp, Python, JavaScript };
+/// "cpp" | "c++" | "python" | "py" | "javascript" | "js" | "typescript" | "ts"
+ExportLanguage export_language(const std::string& name);
+const char* file_extension(ExportLanguage lang);
+
+/// Export a program as plug-in code for an app. Every language gets an exact run() and, when the
+/// program only reads plain numbers (sensors without arguments, no actions), a choose(options,
+/// context) that scores each option and returns the best (with calibrated confidence for
+/// decision strains), and score(values) for single-answer programs. `header` lines become the
+/// file's leading comment (e.g. the report card).
+std::string export_code(ExportLanguage lang, const MachineSpec& spec, const Program& program, int num_outputs,
+                        const std::string& name, const std::vector<std::string>& header = {},
+                        const nlohmann::json& extras = nlohmann::json::object());
+
+/// Held-out performance of a strain compared with the simple solutions, as plain text lines.
+std::vector<std::string> report_card(const Strain& s);
+
 }  // namespace adaptogen

@@ -8,6 +8,7 @@
 #include <stdexcept>
 
 #include "adaptogen/problems/formula.hpp"
+#include "adaptogen/problems/decisions.hpp"
 #include "adaptogen/problems/lists.hpp"
 #include "adaptogen/build_config.hpp"
 #include "adaptogen/plugin.hpp"
@@ -47,6 +48,14 @@ void register_builtin_problems() {
                           "\"test_fraction\": 0.25, \"noise\": 0.0}\n    benchmarks:" + targets,
                           [](const nlohmann::json& p, std::uint64_t seed) -> std::unique_ptr<Problem> {
                               return FormulaProblem::from_params(p, seed);
+                          }});
+        register_problem({"decisions",
+                          "Decisions from data: learn to choose the best option from logged examples (CSV/JSON); compared with the best "
+                          "single-feature rule and a linear model.",
+                          "{\"data\": \"file.csv\" | [\"a.csv\", ...], \"test_fraction\": 0.25}; CSV: one row per option with "
+                          "columns case, <features...>, context.<name>..., reward[, option]",
+                          [](const nlohmann::json& p, std::uint64_t seed) -> std::unique_ptr<Problem> {
+                              return DecisionProblem::from_params(p, seed);
                           }});
         register_problem({"list",
                           "List algorithms: compute a property of a list (programs must discover iteration).",

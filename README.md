@@ -120,12 +120,78 @@ Optional extras: `"constant_tuning": true` (local search on the constants of the
 no significant gain in benchmarks) and `"cache_duplicates": true` (offspring identical to a parent
 reuse its scores; same results, ~3% fewer evaluations, only without down-sampling).
 
+## Decisions from data: plug-in rules for apps and agents
+
+Most workflows are full of small, repeated decisions: which courier, which ticket first, which
+model to call, retry or not. adaptogen can learn a **decision rule** from your logged decisions
+(no code), prove on held-out data that it beats the simple solutions, freeze it as a strain,
+adapt it to your own data, and hand it to an agent (MCP) or a developer (Python / JavaScript /
+C++ code). It plays the "System One" role: fast, local, free and deterministic, beside an LLM
+that handles the open-ended work.
+
+**1. Data**: CSV, one row per option. `case` groups options into one decision, `reward` says how
+well it turned out (or 1/0 for right/wrong), `context.*` columns describe the situation:
+
+```
+case,price,eta_hours,rating,context.deadline_hours,reward,option
+0,11.69,1.9,4.6,6,12.417,courier-0
+0,23.01,6.8,2.7,6,-1.408,courier-1
+```
+
+**2. Evolve and freeze**: every run reports the best single-feature rule and a linear model on the
+same held-out decisions:
+
+```bash
+./build/adaptogen evolve --problem decisions --param data=examples/data/couriers.csv --save-strain courier-picker
+```
+
+```
+test (unseen): accuracy=0.955 best_single_feature_accuracy=0.53 linear_model_accuracy=0.63 ...
+```
+
+**3. Decide**: choice, scores and calibrated confidence. Low confidence means: ask a person or an LLM.
+
+```bash
+./build/adaptogen decide courier-picker --context '{"deadline_hours": 4}' --options '[{"price": 6, "eta_hours": 5, "rating": 4.8}, {"price": 14, "eta_hours": 2, "rating": 4.1}]'
+```
+
+**4. Adapt to your own use case**: re-evolve from the frozen strain on your data. It is saved as the
+next version only if it is not worse on held-out decisions:
+
+```bash
+./build/adaptogen adapt courier-picker --data my_orders.csv --only-new
+```
+
+**5. Plug it into an app**: a single dependency-free file with `choose(options, context)` and a
+report card (held-out results vs the simple solutions) in its header:
+
+```bash
+./build/adaptogen export --strain courier-picker --language python -o courier_picker.py
+```
+
+```python
+import courier_picker
+courier_picker.choose([{"price": 6, "eta_hours": 5, "rating": 4.8},
+                       {"price": 14, "eta_hours": 2, "rating": 4.1}], {"deadline_hours": 4})
+# {'choice': 1, 'scores': [...], 'ranking': [1, 0], 'margin': ..., 'confidence': ...}
+```
+
+`--language javascript` gives an ES module (`choose`, `score`, `run`; usable from TypeScript);
+`--language cpp` a header. All three compute exactly what the engine computes. Agents get the
+same through MCP: `strain_decide`, `strain_adapt`, `export_code`.
+
+Results (RESULTS.md §8):
+- Couriers: 95.5% held-out accuracy, against 63% for a linear model and 53% for the best single feature.
+- One business's own 150 orders: adapting the frozen general strain reached 93% on average,
+  against 85% for evolving from scratch and 64% for a linear model.
+
 ## Built-in problems
 
 | Problem | What evolves | Compared against |
 |---|---|---|
 | `formula` | a formula from data (benchmarks or your CSV) | tree GP, polynomial fit |
 | `list` | sum / max / count of a list (must discover loops) | – |
+| `decisions` | a choice rule learned from logged decisions in a CSV/JSON (no code) | best single-feature rule, linear model |
 | `scheduling` | a rule for ordering tasks with deadlines and priorities | earliest deadline first, weighted shortest job first |
 | `errands` | a rule for visiting shops with opening hours | nearest shop first, earliest closing first |
 | `packing` | a rule for packing a bag with a weight limit | best value per kg; scored against the exact optimum |
@@ -389,9 +455,9 @@ For Claude Desktop, add to `claude_desktop_config.json`:
 ```
 
 Tools: `list_problems`, `describe_problem`, `evolve_start` / `evolve_status` / `evolve_cancel`
-(evolution runs in the background), `plugin_new`, `plugin_write`, `plugin_read`,
-`plugin_validate`, `strains_list`, `strain_show`, `strain_check`, `strain_simplify`,
-`strain_lineage`, `export_cpp`. Plug-in files can only be written and read inside `--workspace`.
+(evolution runs in the background), `strain_decide`, `strain_adapt`, `export_code`
+(cpp / python / javascript), `plugin_new`, `plugin_write`, `plugin_read`, `plugin_validate`,
+`strains_list`, `strain_show`, `strain_check`, `strain_simplify`, `strain_lineage`, `export_cpp`. Plug-in files can only be written and read inside `--workspace`.
 The server also sends Claude a short workflow guide when it connects.
 
 Then ask, for example: *"Evolve a rule for planning my Saturday errands: the pharmacy closes at

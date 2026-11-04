@@ -13,6 +13,8 @@
 #include "adaptogen/registry.hpp"
 #include "adaptogen/serialize.hpp"
 #include "adaptogen/build_config.hpp"
+#include "adaptogen/decide.hpp"
+#include "adaptogen/problems/decisions.hpp"
 #include "adaptogen/mcp.hpp"
 #include "adaptogen/plugin.hpp"
 #include "adaptogen/report.hpp"
@@ -827,6 +829,74 @@ TEST(exported_cpp_matches_the_vm_exactly) {
     CHECK(step_limited > 0);  // some programs really hit the limit, and still match
 }
 
+TEST(exported_python_and_javascript_match_the_vm) {
+    MachineSpec s;
+    s.ops = core_ops();
+    s.channels = {{"x", ChannelKind::Sensor, 0, "", ""}, {"item", ChannelKind::Sensor, 1, "", ""}, {"push", ChannelKind::Action, 2, "", ""}};
+    s.limits.max_steps = 40;
+    s.limits.max_loop_iterations = 7;
+    s.finalize();
+    struct Env : Environment {
+        double sense(int ch, const double* a, int n) override { return ch + 0.5 * (n > 0 ? a[0] : 0) - 0.25 * (n > 1 ? a[1] : 0) + 1.5; }
+        double act(int ch, const double* a, int n) override { return 0.5 * (n > 0 ? a[0] : 0) + ch - (n > 1 ? a[1] : 0); }
+    };
+    VariationConfig v;
+    v.init_min_length = 10;
+    v.init_max_length = 60;
+    Rng rng(33);
+    const auto dir = std::filesystem::temp_directory_path() / "adaptogen-export-scripts";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const int N = 40;
+    std::vector<Program> progs;
+    std::string pyh = "import sys\nsys.path.insert(0, '" + dir.string() + "')\n", jsh;
+    for (int k = 0; k < N; ++k) {
+        progs.push_back(random_program(s, v, rng));
+        const std::string m = "p" + std::to_string(k);
+        std::ofstream(dir / (m + ".py")) << export_code(ExportLanguage::Python, s, progs.back(), 1, m);
+        std::ofstream(dir / (m + ".mjs")) << export_code(ExportLanguage::JavaScript, s, progs.back(), 1, m);
+        pyh += "import " + m + "\nr = [0.0] * 8\n" + m +
+               ".run(lambda c, a, n: c + 0.5 * (a[0] if n > 0 else 0) - 0.25 * (a[1] if n > 1 else 0) + 1.5, r, "
+               "lambda c, a, n: 0.5 * (a[0] if n > 0 else 0) + c - (a[1] if n > 1 else 0))\nprint(' '.join(repr(x) for x in r))\n";
+        jsh += "import * as " + m + " from './" + m + ".mjs';\n";
+    }
+    jsh += "for (const m of [";
+    for (int k = 0; k < N; ++k) jsh += (k ? ", " : "") + std::string("p") + std::to_string(k);
+    jsh += "]) { const r = new Array(8).fill(0); m.run((c, a, n) => c + 0.5 * (n > 0 ? a[0] : 0) - 0.25 * (n > 1 ? a[1] : 0) + 1.5, r, "
+           "(c, a, n) => 0.5 * (n > 0 ? a[0] : 0) + c - (n > 1 ? a[1] : 0)); console.log(r.map((x) => x.toPrecision(17)).join(' ')); }\n";
+    std::ofstream(dir / "harness.py") << pyh;
+    std::ofstream(dir / "harness.mjs") << jsh;
+    int step_limited = 0;
+    std::vector<std::array<double, 8>> expect;
+    for (const auto& p : progs) {
+        Env env;
+        std::array<double, 8> r{};
+        step_limited += run(s, p, env, r).step_limit_hit;
+        expect.push_back(r);
+    }
+    CHECK(step_limited > 0);
+    for (const std::string cmd : {"python3 -I '" + (dir / "harness.py").string() + "'", "node '" + (dir / "harness.mjs").string() + "'"}) {
+        FILE* out = popen(cmd.c_str(), "r");
+        CHECK(out != nullptr);
+        if (!out) continue;
+        int mismatches = 0, read = 0;
+        for (int k = 0; k < N; ++k)
+            for (int j = 0; j < 8; ++j) {
+                double x = 0;
+                if (std::fscanf(out, "%lf", &x) != 1) {
+                    ++mismatches;
+                    continue;
+                }
+                ++read;
+                const double y = expect[static_cast<std::size_t>(k)][static_cast<std::size_t>(j)];
+                if (!(x == y || std::fabs(x - y) <= 1e-12 * (1 + std::fabs(y)))) ++mismatches;
+            }
+        pclose(out);
+        CHECK(read == N * 8);
+        CHECK(mismatches == 0);
+    }
+}
+
 TEST(lineage_records_improvements_and_reports) {
     auto problem = FormulaProblem::from_params({{"target", "koza1"}}, 3);
     EngineConfig cfg;
@@ -871,6 +941,59 @@ TEST(mcp_server_speaks_json_rpc) {
     const json st = json::parse(done.at("result").at("content")[0].at("text").get<std::string>());
     CHECK(st.at("state") == "done" && st.at("result").contains("pseudocode"));
     CHECK(server.handle(json::parse(R"({"jsonrpc":"2.0","id":7,"method":"nope"})")).at("error").at("code") == -32601);
+}
+
+TEST(decisions_from_data_with_baselines_and_decide) {
+    // Synthetic logged decisions: the best option is the cheapest one that arrives in time.
+    const auto dir = std::filesystem::temp_directory_path() / "adaptogen-decisions-test";
+    std::filesystem::create_directories(dir);
+    const auto csv = dir / "d.csv";
+    {
+        std::ofstream f(csv);
+        f << "case,price,eta,context.deadline,reward,option\n";
+        Rng rng(5);
+        for (int c = 0; c < 200; ++c) {
+            const int deadline = rng.range(2, 8);
+            for (int k = 0; k < 4; ++k) {
+                const int price = rng.range(1, 20), eta = rng.range(1, 10);
+                f << c << "," << price << "," << eta << "," << deadline << "," << ((eta <= deadline ? 100 : 0) - price) << ",o" << k << "\n";
+            }
+        }
+    }
+    auto p = DecisionProblem::from_params({{"data", csv.string()}}, 1);
+    CHECK(p->num_cases(Split::Train) == 150 && p->num_cases(Split::Test) == 50);
+    const MachineSpec spec = make_machine(*p, EngineConfig{});
+    // Hand-written rule: score = -price, minus 1000 when late.
+    auto ch = [&](const std::string& n) {
+        for (std::size_t i = 0; i < spec.channels.size(); ++i)
+            if (spec.channels[i].name == n) return static_cast<int>(i);
+        return -1;
+    };
+    Program rule{{I(Op::Sense, 1, 0, 0, 0, 0, ch("option.eta")), I(Op::Sense, 2, 0, 0, 0, 0, ch("context.deadline")),
+                  I(Op::Sense, 3, 0, 0, 0, 0, ch("option.price")), I(Op::Neg, 0, 3), I(Op::Const, 4, 0, 0, 0, 1000.0),
+                  I(Op::IfLt, 0, 2, 1), I(Op::Sub, 0, 0, 4)}};
+    const auto ms = p->metrics(spec, rule, Split::Test);
+    CHECK(ms[0].name == "accuracy" && ms[0].value == 1.0);
+    double lin = 0, sf = 0;
+    for (const auto& m : ms) {
+        if (m.name == "linear_model_accuracy") lin = m.value;
+        if (m.name == "best_single_feature_accuracy") sf = m.value;
+    }
+    CHECK(lin < 1.0 && sf < 1.0);  // the simple solutions cannot express "cheapest that is on time"
+    // Saved as a strain, decide() applies it to new options, with calibration.
+    EvolutionResult r;
+    r.best = rule;
+    r.test_metrics = ms;
+    Strain s = make_strain("cheapest-on-time", "", *p, spec, r, {{"name", "decisions"}, {"params", {{"data", csv.string()}}}, {"seed", 1}}, EngineConfig{}, {});
+    CHECK(s.extras.contains("decision") && !s.extras.at("decision").at("calibration").empty());
+    const auto d = decide(s, nlohmann::json::parse(R"([{"price": 5, "eta": 9}, {"price": 12, "eta": 3}, {"price": 20, "eta": 1}])"),
+                          nlohmann::json::parse(R"({"deadline": 4})"));
+    CHECK(d.choice == 1 && d.ranking.size() == 3 && d.confidence >= 0);
+    const auto unknown = decide(s, nlohmann::json::parse(R"([{"price": 1, "colour": 3}, {"price": 2}])"));
+    CHECK(unknown.unknown_keys.size() == 1 && unknown.unknown_keys[0] == "colour");
+    CHECK(!unknown.missing.empty());  // eta and deadline were not given
+    const auto card = report_card(s);
+    CHECK(card.back().find("better than both simple solutions") != std::string::npos);
 }
 
 TEST(seeding_config_round_trip) {

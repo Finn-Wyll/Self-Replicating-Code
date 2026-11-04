@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "adaptogen/channel.hpp"
 #include "adaptogen/instruction.hpp"
 #include "adaptogen/vm.hpp"
@@ -67,6 +69,12 @@ public:
     virtual bool solved(const MachineSpec& spec, const Program& program, Split split) const {
         (void)spec; (void)program; (void)split;
         return false;
+    }
+
+    /// Extra metadata saved with a strain evolved on this problem (e.g. confidence calibration).
+    virtual nlohmann::json strain_extras(const MachineSpec& spec, const Program& program) const {
+        (void)spec; (void)program;
+        return nlohmann::json::object();
     }
 
     /// Mean case score over a split.

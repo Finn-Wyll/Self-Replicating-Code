@@ -34,8 +34,10 @@ add_library(adaptogen
   src/plugin.cpp
   src/report.cpp
   src/mcp.cpp
+  src/decide.cpp
   src/problems/formula.cpp
-  src/problems/lists.cpp)
+  src/problems/lists.cpp
+  src/problems/decisions.cpp)
 target_include_directories(adaptogen PUBLIC include PRIVATE ${CMAKE_BINARY_DIR}/generated)
 target_link_libraries(adaptogen PUBLIC nlohmann_json::nlohmann_json Threads::Threads)
 

@@ -119,6 +119,7 @@ json strain_to_json(const Strain& s) {
           {"program_evaluations", s.program_evaluations},
           {"events", s.events}}},
         {"scores", {{"train", s.train_metrics}, {"test", s.test_metrics}, {"solved_test", s.solved_test}}},
+        {"extras", s.extras},
     };
 }
 
@@ -153,6 +154,7 @@ Strain strain_from_json(const json& j) {
     s.train_metrics = sc.value("train", json::object());
     s.test_metrics = sc.value("test", json::object());
     s.solved_test = sc.value("solved_test", false);
+    s.extras = j.value("extras", json::object());
     return s;
 }
 
@@ -184,6 +186,7 @@ Strain make_strain(const std::string& name, const std::string& description, cons
     s.solved_test = result.solved_test;
     for (const auto& e : result.lineage)
         s.events.push_back({{"generation", e.generation}, {"fitness", e.fitness}, {"origin", e.origin}});
+    s.extras = problem.strain_extras(spec, result.best);
     return s;
 }
 

@@ -11,6 +11,7 @@
 #include "adaptogen/analysis.hpp"
 #include "adaptogen/engine.hpp"
 #include "adaptogen/registry.hpp"
+#include "adaptogen/decide.hpp"
 #include "adaptogen/mcp.hpp"
 #include "adaptogen/plugin.hpp"
 #include "adaptogen/report.hpp"
@@ -32,9 +33,17 @@ usage:
   adaptogen show --program FILE [--all]       show a saved program and its scores
   adaptogen strains list|show|check|reindex   browse and inspect the strain bank (see below)
   adaptogen plugin new|header|build|validate|info   write problems as C++ plug-ins (see below)
+  adaptogen decide STRAIN --options JSON|@FILE [--context JSON|@FILE]
+                                              apply a strain: choice, scores, confidence (JSON)
+  adaptogen adapt STRAIN --data NEW.csv [--only-new] [--generations N] [--force]
+                                              re-evolve a data-driven strain on old + new data (or only the
+                                              new data: specialise it to your use case), starting from it;
+                                              saved as the next version only if not worse on held-out
+                                              cases (--force saves anyway)
   adaptogen mcp [--workspace DIR] [--library DIR]   run as an MCP server (tools for Claude) on stdio
-  adaptogen export (--program FILE | --strain ID) [--name NAME] [-o FILE.hpp]
-                                              export an evolved program as standalone C++
+  adaptogen export (--program FILE | --strain ID) [--language cpp|python|javascript] [--name NAME] [-o FILE]
+                                              plug-in code for apps: exact run(), choose(options) and
+                                              a report card against simple solutions
 
 evolve options:
   --params JSON          problem parameters, e.g. '{"target":"koza1"}'
@@ -441,8 +450,95 @@ int cmd_plugin(std::vector<std::string> args) {
     throw std::runtime_error("unknown plugin subcommand '" + sub + "'");
 }
 
+json json_arg(const std::string& v) {  // JSON text, or @file
+    if (!v.empty() && v[0] == '@') return read_json(v.substr(1));
+    return json::parse(v);
+}
+
+int cmd_decide(const std::vector<std::string>& args) {
+    std::string id, library = default_library();
+    json options, context = json::object();
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        auto next = [&]() -> const std::string& {
+            if (i + 1 >= args.size()) throw std::runtime_error(args[i] + " needs a value");
+            return args[++i];
+        };
+        if (args[i] == "--options") options = json_arg(next());
+        else if (args[i] == "--context") context = json_arg(next());
+        else if (args[i] == "--library") library = next();
+        else if (id.empty() && args[i][0] != '-') id = args[i];
+        else throw std::runtime_error("unknown option '" + args[i] + "'");
+    }
+    if (id.empty()) throw std::runtime_error("decide needs a strain id");
+    const Strain s = StrainLibrary(library).load(id);
+    json out = to_json(decide(s, options, context));
+    out["strain"] = s.id;
+    std::cout << out.dump(2) << '\n';
+    return 0;
+}
+
+int cmd_adapt(const std::vector<std::string>& args) {
+    std::string id, library = default_library();
+    std::vector<std::string> data;
+    int generations = 0;
+    long long seed = -1;
+    bool force = false, only_new = false;
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        auto next = [&]() -> const std::string& {
+            if (i + 1 >= args.size()) throw std::runtime_error(args[i] + " needs a value");
+            return args[++i];
+        };
+        if (args[i] == "--only-new") only_new = true;
+        else if (args[i] == "--seed") seed = std::stoll(next());
+        else if (args[i] == "--data") data.push_back(next());
+        else if (args[i] == "--generations") generations = std::stoi(next());
+        else if (args[i] == "--library") library = next();
+        else if (args[i] == "--force") force = true;
+        else if (id.empty() && args[i][0] != '-') id = args[i];
+        else throw std::runtime_error("unknown option '" + args[i] + "'");
+    }
+    if (id.empty() || data.empty()) throw std::runtime_error("usage: adaptogen adapt STRAIN --data NEW.csv");
+    StrainLibrary lib(library);
+    const Strain s = lib.load(id);
+    json params = s.problem.value("params", json::object());
+    if (!params.contains("data")) throw std::runtime_error("adapt needs a strain evolved from data (decisions or formula with data)");
+    json files = only_new ? json::array() : (params.at("data").is_array() ? params.at("data") : json::array({params.at("data")}));
+    for (const auto& d : data) files.push_back(d);
+    params["data"] = s.problem.value("name", "") == "decisions" ? files : json(files.back());
+    EngineConfig cfg;
+    if (!s.config.empty()) config_from_json(cfg, s.config);
+    cfg.seeding = EngineConfig::Seeding{};
+    cfg.seeding.strains = {s.id};
+    cfg.seeding.library = library;
+    if (generations > 0) cfg.generations = generations;
+    if (seed >= 0) cfg.seed = static_cast<std::uint64_t>(seed);
+    const std::string pname = s.problem.at("name").get<std::string>();
+    auto problem = make_problem(pname, params, cfg.seed);
+    const MachineSpec spec = make_machine(*problem, cfg);
+    const Program before = revive(s, spec);
+    const double old_score = problem->mean_score(spec, before, Split::Test);
+    std::printf("adapting %s on %zu training cases (old + new data)...\n", s.id.c_str(), problem->num_cases(Split::Train));
+    PreparedRun prepared;
+    EvolutionResult res = run_evolution(*problem, cfg, {}, &prepared);
+    res.best = simplify(*problem, spec, res.best).program;
+    res.train_metrics = problem->metrics(spec, res.best, Split::Train);
+    res.test_metrics = problem->metrics(spec, res.best, Split::Test);
+    res.solved_test = problem->solved(spec, res.best, Split::Test);
+    const double new_score = problem->mean_score(spec, res.best, Split::Test);
+    std::printf("held-out score: %s %.6g -> adapted %.6g\n  before: %s\n  after:  %s\n", s.id.c_str(), old_score, new_score,
+                metrics_line(problem->metrics(spec, before, Split::Test)).c_str(), metrics_line(res.test_metrics).c_str());
+    if (new_score + 1e-12 < old_score && !force) {
+        std::printf("not saved: the adapted program is worse on held-out cases (use --force to save anyway)\n");
+        return 0;
+    }
+    const std::string nid = lib.save(make_strain(s.name, s.description, *problem, spec, res,
+                                                 {{"name", pname}, {"params", params}, {"seed", cfg.seed}}, cfg, {s.id}));
+    std::printf("saved %s (parent %s)\n", nid.c_str(), s.id.c_str());
+    return 0;
+}
+
 int cmd_export(const std::vector<std::string>& args) {
-    std::string program_file, strain_id, name, out_file, library = default_library();
+    std::string program_file, strain_id, name, out_file, library = default_library(), language = "cpp";
     for (std::size_t i = 0; i < args.size(); ++i) {
         auto next = [&]() -> const std::string& {
             if (i + 1 >= args.size()) throw std::runtime_error(args[i] + " needs a value");
@@ -451,6 +547,7 @@ int cmd_export(const std::vector<std::string>& args) {
         if (args[i] == "--program") program_file = next();
         else if (args[i] == "--strain") strain_id = next();
         else if (args[i] == "--name") name = next();
+        else if (args[i] == "--language") language = next();
         else if (args[i] == "-o") out_file = next();
         else if (args[i] == "--library") library = next();
         else throw std::runtime_error("unknown option '" + args[i] + "'");
@@ -459,8 +556,8 @@ int cmd_export(const std::vector<std::string>& args) {
     if (!strain_id.empty()) {
         const Strain s = StrainLibrary(library).load(strain_id);
         const MachineSpec spec = strain_machine(s);
-        code = export_cpp(spec, program_from_json(spec, s.program), s.num_outputs, name.empty() ? s.id : name,
-                          "strain " + s.id + (s.description.empty() ? "" : " (" + s.description + ")"));
+        code = export_code(export_language(language), spec, program_from_json(spec, s.program), s.num_outputs,
+                           name.empty() ? s.id : name, report_card(s), s.extras);
     } else if (!program_file.empty()) {
         const json saved = read_json(program_file);
         EngineConfig cfg;
@@ -468,8 +565,8 @@ int cmd_export(const std::vector<std::string>& args) {
         const json& pj = saved.at("problem");
         auto problem = make_problem(pj.at("name").get<std::string>(), pj.value("params", json::object()), pj.value("seed", cfg.seed));
         const MachineSpec spec = make_machine(*problem, cfg);
-        code = export_cpp(spec, program_from_json(spec, saved.at("program")), problem->num_outputs(),
-                          name.empty() ? problem->name() : name, "evolved for " + problem->name());
+        code = export_code(export_language(language), spec, program_from_json(spec, saved.at("program")), problem->num_outputs(),
+                           name.empty() ? problem->name() : name, {"evolved for " + problem->name()});
     } else {
         throw std::runtime_error("export needs --program FILE or --strain ID");
     }
@@ -660,6 +757,8 @@ int main(int argc, char** argv) {
         if (cmd == "strains") return cmd_strains(args);
         if (cmd == "plugin") return cmd_plugin(args);
         if (cmd == "export") return cmd_export(args);
+        if (cmd == "decide") return cmd_decide(args);
+        if (cmd == "adapt") return cmd_adapt(args);
         if (cmd == "mcp") {
             std::string workspace = ".", library = default_library();
             for (std::size_t i = 0; i + 1 < args.size(); i += 2) {

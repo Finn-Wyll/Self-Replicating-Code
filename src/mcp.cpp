@@ -16,6 +16,7 @@
 #include <thread>
 
 #include "adaptogen/analysis.hpp"
+#include "adaptogen/decide.hpp"
 #include "adaptogen/plugin.hpp"
 #include "adaptogen/registry.hpp"
 #include "adaptogen/report.hpp"
@@ -148,7 +149,21 @@ struct McpServer::Impl {
             tool("strain_simplify", "Save a simplified new version of a strain (dead code removed, verified on its training cases).",
                  {{"id", str}}, {"id"}),
             tool("strain_lineage", "Markdown report of a strain's ancestry: problems, scores and how the code changed.", {{"id", str}}, {"id"}),
-            tool("export_cpp", "Export a strain as a self-contained C++ header that computes exactly what the evolved program does.",
+            tool("strain_decide",
+                 "Use a strain as a fast local decision function: give the options (objects of feature -> number) and optional "
+                 "context; returns the chosen index, every option's score, the margin and (for decision strains) a calibrated "
+                 "confidence. Low confidence = consider deferring to a person or an LLM.",
+                 {{"id", str}, {"options", {{"type", "array"}, {"items", obj}}}, {"context", obj}}, {"id", "options"}),
+            tool("strain_adapt",
+                 "Adapt a data-driven strain (e.g. from the 'decisions' problem) to new outcomes: evolve again on old + new data "
+                 "starting from the strain, in the background (poll evolve_status). only_new=true specialises it to the new "
+                 "data alone (e.g. one business's own logs). Saved as the next version only if it is not worse on held-out cases.",
+                 {{"id", str}, {"data", strs}, {"only_new", boolean}, {"generations", integer}}, {"id", "data"}),
+            tool("export_code",
+                 "Export a strain as plug-in code for an app (language: cpp, python or javascript): exact run(), choose(options) "
+                 "and a header with its held-out results compared with simple solutions.",
+                 {{"id", str}, {"language", str}, {"name", str}}, {"id"}),
+            tool("export_cpp", "Export a strain as a self-contained C++ header (same as export_code with language cpp).",
                  {{"id", str}, {"name", str}}, {"id"}),
         });
     }
@@ -281,10 +296,32 @@ struct McpServer::Impl {
                         {"pseudocode", to_pseudocode(spec, r.best, problem->num_outputs(), true)}};
         }
         if (name == "strain_lineage") return strain_lineage_report(lib, id);
-        if (name == "export_cpp") {
+        if (name == "export_cpp" || name == "export_code") {
             const Strain s = lib.load(id);
             const MachineSpec spec = strain_machine(s);
-            return export_cpp(spec, program_from_json(spec, s.program), s.num_outputs, a.value("name", s.id), "strain " + s.id);
+            return export_code(export_language(a.value("language", std::string("cpp"))), spec, program_from_json(spec, s.program),
+                               s.num_outputs, a.value("name", s.id), report_card(s), s.extras);
+        }
+        if (name == "strain_decide") {
+            const Strain s = lib.load(id);
+            json out = to_json(decide(s, a.at("options"), a.value("context", json::object())));
+            out["strain"] = s.id;
+            return out;
+        }
+        if (name == "strain_adapt") {
+            const Strain s = lib.load(id);
+            json params = s.problem.value("params", json::object());
+            if (!params.contains("data")) throw std::runtime_error("strain_adapt needs a strain evolved from data (e.g. the decisions problem)");
+            json files = a.value("only_new", false) ? json::array()
+                                                    : (params.at("data").is_array() ? params.at("data") : json::array({params.at("data")}));
+            for (const auto& d : a.at("data")) files.push_back(inside_workspace(d.get<std::string>()).string());
+            params["data"] = s.problem.value("name", "") == "decisions" ? files : json(files.back());
+            json cfg = s.config;
+            cfg.erase("seeding");
+            if (a.contains("generations")) cfg["generations"] = a.at("generations");
+            return start_job({{"problem", s.problem.at("name")}, {"params", params}, {"config", cfg}, {"seed", s.problem.value("seed", 1)},
+                              {"seed_strains", json::array({s.id})}, {"save_strain", s.name}, {"description", s.description},
+                              {"only_if_not_worse_than", s.id}});
         }
         throw std::runtime_error("unknown tool '" + name + "'");
     }
@@ -321,9 +358,10 @@ struct McpServer::Impl {
             for (const auto& m : plugin->channel_maps()) cfg.seeding.channel_map.push_back(m);
         }
         const std::string save = a.value("save_strain", ""), description = a.value("description", "");
+        const std::string guard = a.value("only_if_not_worse_than", "");
         if (!save.empty() && !StrainLibrary::valid_name(save)) throw std::runtime_error("invalid strain name '" + save + "'");
         const fs::path lib_dir = library;
-        job->thread = std::thread([job, problem, cfg, pname, params, save, description, lib_dir] {
+        job->thread = std::thread([job, problem, cfg, pname, params, save, description, lib_dir, guard] {
             try {
                 PreparedRun prepared;
                 const MachineSpec spec = make_machine(*problem, cfg);
@@ -348,7 +386,17 @@ struct McpServer::Impl {
                                {"pseudocode", to_pseudocode(spec, res.best, problem->num_outputs(), true)},
                                {"program", program_to_json(spec, res.best)},
                                {"lineage", lineage}};
-                if (!save.empty()) {
+                bool save_it = !save.empty();
+                if (!guard.empty()) {  // adapt: keep the old strain unless the new one is at least as good
+                    const Strain old = StrainLibrary(lib_dir).load(guard);
+                    const double before = problem->mean_score(spec, revive(old, spec), Split::Test);
+                    const double after = problem->mean_score(spec, res.best, Split::Test);
+                    result["held_out_score_before"] = before;
+                    result["held_out_score_after"] = after;
+                    save_it = save_it && after + 1e-12 >= before;
+                    if (!save_it) result["not_saved"] = "the adapted program is worse on held-out cases; " + guard + " is kept";
+                }
+                if (save_it) {
                     std::vector<std::string> parents;
                     for (const auto& s : prepared.strains) parents.push_back(s.id);
                     result["strain"] = StrainLibrary(lib_dir).save(make_strain(save, description, *problem, spec, res,

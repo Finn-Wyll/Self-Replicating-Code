@@ -44,6 +44,7 @@ struct Strain {
     nlohmann::json train_metrics, test_metrics;
     bool solved_test = false;
     nlohmann::json events = nlohmann::json::array();  // improvements during its run: generation, fitness, origin
+    nlohmann::json extras = nlohmann::json::object();  // problem-specific metadata (e.g. decision calibration)
 };
 
 nlohmann::json strain_to_json(const Strain& s);
@@ -142,6 +143,9 @@ public:
     std::vector<Metric> metrics(const MachineSpec& spec, const Program& program, Split split) const override;
     bool solved(const MachineSpec& spec, const Program& program, Split split) const override {
         return primary_.solved(spec, program, split);
+    }
+    nlohmann::json strain_extras(const MachineSpec& spec, const Program& program) const override {
+        return primary_.strain_extras(spec, program);
     }
 
 private:
