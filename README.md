@@ -70,7 +70,7 @@ Other commands:
 ./build/adaptogen evolve --problem formula --param target=koza1 --json   # one JSON event per line
 ```
 
-List algorithms (the program must discover iteration; it is tested on lists 4x longer than
+List algorithms (the program must discover iteration; it is tested on lists 2.5x longer than
 it trained on):
 
 ```bash

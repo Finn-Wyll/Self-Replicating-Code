@@ -12,10 +12,13 @@ enum class SelectionMethod { Tournament, Lexicase };
 
 /// The bacteria-inspired mechanisms. Each is off by default so its effect can be measured.
 struct Mechanisms {
-    /// SOS response: a lineage that has not improved for `patience` generations produces
-    /// offspring with extra mutations: multiplier = 1 + growth * (stagnation - patience), capped.
+    /// SOS response: when progress stalls for `patience` generations, offspring get extra
+    /// mutations: multiplier = 1 + growth * (stalled generations - patience), capped.
+    /// trigger "lineage": each lineage's own stagnation (no improvement over its parent);
+    /// trigger "population": the whole population, when the best program stops improving.
     struct Stress {
         bool enabled = false;
+        std::string trigger = "lineage";
         int patience = 3;
         double growth = 0.5;
         double max_multiplier = 6.0;
@@ -76,6 +79,9 @@ struct EngineConfig {
     int threads = 0;           // 0 = hardware concurrency
     bool stop_when_solved = true;
     long max_program_evaluations = 0;  // 0 = no budget beyond generations
+    /// Fraction of the training cases held back to choose the final program (guards against
+    /// memorisation). 0 = off: the best program on all training cases wins.
+    double validation_fraction = 0.0;
 };
 
 /// Published every generation (the event API that CLI, MCP and a future GUI consume).

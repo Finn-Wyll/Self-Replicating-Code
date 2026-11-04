@@ -76,8 +76,23 @@ EvolutionResult Engine::run() {
     const Mechanisms& mech = cfg_.mechanisms;
     const VariationConfig& var = cfg_.variation;
     Rng rng(cfg_.seed);
-    const std::size_t C = problem_.num_cases(Split::Train);
     const int outputs = problem_.num_outputs();
+    // Training cases used for selection ("fit") and, optionally, held-back validation cases
+    // used only to choose the final program.
+    std::vector<std::size_t> fit_cases(problem_.num_cases(Split::Train)), val_cases;
+    std::iota(fit_cases.begin(), fit_cases.end(), 0);
+    if (cfg_.validation_fraction > 0 && fit_cases.size() >= 4) {
+        Rng split_rng(cfg_.seed ^ 0x7a11da7eULL);
+        for (std::size_t i = fit_cases.size(); i > 1; --i) std::swap(fit_cases[i - 1], fit_cases[split_rng.below(i)]);
+        const std::size_t nv = std::min(fit_cases.size() - 2,
+                                        static_cast<std::size_t>(std::clamp(cfg_.validation_fraction, 0.0, 0.9) *
+                                                                 static_cast<double>(fit_cases.size())));
+        val_cases.assign(fit_cases.end() - static_cast<long>(nv), fit_cases.end());
+        fit_cases.resize(fit_cases.size() - nv);
+        std::sort(fit_cases.begin(), fit_cases.end());
+    }
+    const std::size_t C = fit_cases.size();
+    const bool validating = !val_cases.empty();
 
     // Population layout: a plain list, or a W x H torus when spatial structure is on.
     std::size_t P = static_cast<std::size_t>(std::max(2, cfg_.population));
@@ -106,7 +121,7 @@ EvolutionResult Engine::run() {
             ind.scores.resize(C);
             double total = 0.0;
             for (std::size_t c = 0; c < C; ++c)
-                total += ind.scores[c] = problem_.evaluate_case(runner, ind.program, Split::Train, c);
+                total += ind.scores[c] = problem_.evaluate_case(runner, ind.program, Split::Train, fit_cases[c]);
             const double mean = C ? total / static_cast<double>(C) : 0.0;
             ind.mean_steps = C ? static_cast<double>(runner.steps()) / static_cast<double>(C) : 0.0;
             ind.fitness = mean - cfg_.length_cost * static_cast<double>(ind.program.size()) -
@@ -180,9 +195,11 @@ EvolutionResult Engine::run() {
     };
 
     // ---- reproduction --------------------------------------------------------------------
+    const bool population_stress = mech.stress.trigger == "population";
+    int population_stagnation = 0;  // generations since the best program last improved
     auto stress_multiplier = [&](int stagnation) {
         if (!mech.stress.enabled) return 1.0;
-        const int over = stagnation - mech.stress.patience;
+        const int over = (population_stress ? population_stagnation : stagnation) - mech.stress.patience;
         return over <= 0 ? 1.0 : std::min(mech.stress.max_multiplier, 1.0 + mech.stress.growth * over);
     };
 
@@ -232,6 +249,16 @@ EvolutionResult Engine::run() {
     EvolutionResult result;
     Individual hall_of_fame;  // best ever (spatial replacement can lose the global best)
     bool have_best = false;
+    double hof_validation = -1e300;
+    double last_best_fitness = -1e300;
+    auto validation_score = [&](const Program& p) {
+        Runner runner(spec_);
+        double total = 0;
+        for (std::size_t c : val_cases) total += problem_.evaluate_case(runner, p, Split::Train, c);
+        const double n = static_cast<double>(val_cases.size());
+        return total / n - cfg_.length_cost * static_cast<double>(p.size()) -
+               cfg_.time_cost * static_cast<double>(runner.steps()) / n;
+    };
     int gen = 0;
     evaluate(pop);
     for (;; ++gen) {
@@ -246,9 +273,25 @@ EvolutionResult Engine::run() {
             sum_stress += stress_multiplier(pop[i].stagnation);
             max_stag = std::max(max_stag, pop[i].stagnation);
         }
-        if (!have_best || pop[best].fitness > hall_of_fame.fitness) {
+        if (validating) {
+            // The final program is chosen on held-back cases, so memorising the selection
+            // cases does not win. Ties go to the better training fitness.
+            const double v = validation_score(pop[best].program);
+            if (!have_best || v > hof_validation + 1e-12 ||
+                (v >= hof_validation - 1e-12 && pop[best].fitness > hall_of_fame.fitness)) {
+                hall_of_fame = pop[best];
+                hof_validation = v;
+                have_best = true;
+            }
+        } else if (!have_best || pop[best].fitness > hall_of_fame.fitness) {
             hall_of_fame = pop[best];
             have_best = true;
+        }
+        if (pop[best].fitness > last_best_fitness + 1e-12) {
+            last_best_fitness = pop[best].fitness;
+            population_stagnation = 0;
+        } else {
+            ++population_stagnation;
         }
         const Program& bp = hall_of_fame.program;
         const double Pd = static_cast<double>(pop.size());
@@ -257,7 +300,7 @@ EvolutionResult Engine::run() {
         rep.generation = gen;
         rep.program_evaluations = evaluations;
         rep.seconds = elapsed();
-        rep.best_fitness = hall_of_fame.fitness;
+        rep.best_fitness = hall_of_fame.fitness;  // champion's fitness on the selection cases
         rep.mean_fitness = sum_fit / Pd;
         rep.best_length = static_cast<double>(bp.size());
         rep.best_effective_length = static_cast<double>(effective_length(spec_, bp, outputs));
@@ -267,7 +310,9 @@ EvolutionResult Engine::run() {
                                 {"mean_stress_multiplier", sum_stress / Pd},
                                 {"max_stagnation", static_cast<double>(max_stag)},
                                 {"transfers", static_cast<double>(transfers)},
-                                {"duplications", static_cast<double>(duplications)}};
+                                {"duplications", static_cast<double>(duplications)},
+                                {"population_stagnation", static_cast<double>(population_stagnation)}};
+        if (validating) rep.population_stats.push_back({"best_validation_score", hof_validation});
         transfers = duplications = 0;
         if (callback_) callback_(rep);
 

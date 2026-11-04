@@ -87,7 +87,7 @@ namespace {
 
 json mechanisms_to_json(const Mechanisms& m) {
     return json{
-        {"stress", {{"enabled", m.stress.enabled}, {"patience", m.stress.patience}, {"growth", m.stress.growth},
+        {"stress", {{"enabled", m.stress.enabled}, {"trigger", m.stress.trigger}, {"patience", m.stress.patience}, {"growth", m.stress.growth},
                     {"max_multiplier", m.stress.max_multiplier}}},
         {"hypermutation", {{"enabled", m.hypermutation.enabled}, {"initial_rate", m.hypermutation.initial_rate},
                            {"min_rate", m.hypermutation.min_rate}, {"max_rate", m.hypermutation.max_rate},
@@ -122,8 +122,11 @@ void mechanisms_from_json(Mechanisms& m, const json& j) {
             continue;
         }
         if (name == "stress") {
-            check_keys(name, s, {"enabled", "patience", "growth", "max_multiplier"});
+            check_keys(name, s, {"enabled", "trigger", "patience", "growth", "max_multiplier"});
             set_field(s, "enabled", m.stress.enabled);
+            set_field(s, "trigger", m.stress.trigger);
+            if (m.stress.trigger != "lineage" && m.stress.trigger != "population")
+                throw std::runtime_error("mechanisms.stress.trigger must be \"lineage\" or \"population\"");
             set_field(s, "patience", m.stress.patience);
             set_field(s, "growth", m.stress.growth);
             set_field(s, "max_multiplier", m.stress.max_multiplier);
@@ -204,6 +207,7 @@ json config_to_json(const EngineConfig& c) {
         {"threads", c.threads},
         {"stop_when_solved", c.stop_when_solved},
         {"max_program_evaluations", c.max_program_evaluations},
+        {"validation_fraction", c.validation_fraction},
         {"mechanisms", mechanisms_to_json(c.mechanisms)},
         {"variation",
          {{"init_min_length", v.init_min_length},
@@ -247,6 +251,7 @@ void config_from_json(EngineConfig& c, const json& j) {
         else if (key == "stop_when_solved") c.stop_when_solved = val.get<bool>();
         else if (key == "max_program_evaluations") c.max_program_evaluations = val.get<long>();
         else if (key == "mechanisms") mechanisms_from_json(c.mechanisms, val);
+        else if (key == "validation_fraction") c.validation_fraction = val.get<double>();
         else if (key == "variation") {
             auto& v = c.variation;
             for (const auto& [k, x] : val.items()) {

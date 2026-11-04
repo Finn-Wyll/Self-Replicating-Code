@@ -1,7 +1,7 @@
 #pragma once
 // List algorithms: compute a property of a list of numbers (sum, max, count of positives).
-// Programs must discover iteration themselves. Training lists are short; test lists are
-// up to 4x longer, so only programs that really loop over the list generalise.
+// Programs must discover iteration themselves. Test lists are up to 2.5x longer than the
+// training lists, so only programs that really loop over the list generalise.
 #include <nlohmann/json.hpp>
 
 #include "adaptogen/problem.hpp"
@@ -13,8 +13,8 @@ class ListProblem : public Problem {
 public:
     enum class Task { Sum, Max, CountPositive };
 
-    /// params: {"task": "sum"|"max"|"count_positive", "train_cases": 60, "train_max_length": 10,
-    ///          "test_cases": 200, "test_max_length": 40, "value_range": 9}
+    /// params: {"task": "sum"|"max"|"count_positive", "train_cases": 100, "train_max_length": 20,
+    ///          "test_cases": 200, "test_max_length": 50, "value_range": 9}
     static std::unique_ptr<ListProblem> from_params(const nlohmann::json& params, std::uint64_t seed);
     ListProblem(Task task, std::vector<std::vector<double>> train, std::vector<std::vector<double>> test);
 

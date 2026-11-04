@@ -34,8 +34,8 @@ std::unique_ptr<ListProblem> ListProblem::from_params(const nlohmann::json& para
         }
         return out;
     };
-    auto train = make(params.value("train_cases", 60), params.value("train_max_length", 10));
-    auto test = make(params.value("test_cases", 200), params.value("test_max_length", 40));
+    auto train = make(params.value("train_cases", 100), params.value("train_max_length", 20));
+    auto test = make(params.value("test_cases", 200), params.value("test_max_length", 50));
     return std::make_unique<ListProblem>(task, std::move(train), std::move(test));
 }
 
@@ -46,7 +46,7 @@ std::string ListProblem::name() const { return std::string("list:") + to_string(
 
 std::string ListProblem::description() const {
     return std::string("Compute the ") + to_string(task_) +
-           " of a list of numbers; tested on lists up to 4x longer than in training";
+           " of a list of numbers; tested on lists up to 2.5x longer than in training";
 }
 
 std::vector<Channel> ListProblem::channels() const {

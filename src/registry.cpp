@@ -38,8 +38,8 @@ void register_builtin_problems() {
                           }});
         register_problem({"list",
                           "List algorithms: compute a property of a list (programs must discover iteration).",
-                          "{\"task\": \"sum\"|\"max\"|\"count_positive\", \"train_cases\": 60, \"train_max_length\": 10, "
-                          "\"test_cases\": 200, \"test_max_length\": 40, \"value_range\": 9}",
+                          "{\"task\": \"sum\"|\"max\"|\"count_positive\", \"train_cases\": 100, \"train_max_length\": 20, "
+                          "\"test_cases\": 200, \"test_max_length\": 50, \"value_range\": 9}",
                           [](const nlohmann::json& p, std::uint64_t seed) -> std::unique_ptr<Problem> {
                               return ListProblem::from_params(p, seed);
                           }});

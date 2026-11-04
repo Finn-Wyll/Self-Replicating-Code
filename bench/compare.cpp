@@ -14,6 +14,7 @@
 #include "adaptogen/engine.hpp"
 #include "adaptogen/problems/formula.hpp"
 #include "adaptogen/problems/lists.hpp"
+#include "adaptogen/serialize.hpp"
 #include "baselines.hpp"
 
 using namespace adaptogen;
@@ -25,6 +26,7 @@ struct Benchmark {
     std::string name, description, primary;  // primary = name of the main test metric
     std::function<std::unique_ptr<Problem>(std::uint64_t seed)> make;
     bool formula = false;
+    double validation_fraction = 0.0;  // held-back training cases for choosing the final program
 };
 
 struct Algorithm {
@@ -121,11 +123,11 @@ std::vector<Benchmark> all_benchmarks() {
     }
     for (const char* task : {"sum", "max", "count_positive"}) {
         const std::string t = task;
-        b.push_back({"list-" + t, t + " of a list (train length <= 10, test length <= 40)", "accuracy",
+        b.push_back({"list-" + t, t + " of a list (train length <= 20, test length <= 50)", "accuracy",
                      [t](std::uint64_t seed) -> std::unique_ptr<Problem> {
                          return ListProblem::from_params({{"task", t}}, seed);
                      },
-                     false});
+                     false, 0.25});
     }
     return b;
 }
@@ -134,7 +136,11 @@ std::vector<Benchmark> all_benchmarks() {
 
 int main(int argc, char** argv) {
     int runs = 20, population = 500, generations = 100, threads = 0;
+    std::uint64_t seed_base = 1000;
+    bool validation = true;
     std::vector<std::string> targets, only;
+    std::vector<std::pair<std::string, nlohmann::json>> variants;
+    nlohmann::json common = nlohmann::json::object();
     std::string suite = "baselines", out_prefix;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -149,11 +155,23 @@ int main(int argc, char** argv) {
         else if (a == "--target") targets.push_back(next());
         else if (a == "--algorithm") only.push_back(next());
         else if (a == "--suite") suite = next();
+        else if (a == "--seed-base") seed_base = std::stoull(next());
+        else if (a == "--no-validation") validation = false;
+        else if (a == "--set") {  // config overlay applied to every adaptogen run, e.g. --set '{"length_cost":0.01}'
+            common.update(nlohmann::json::parse(next()));
+        } else if (a == "--variant") {  // NAME=JSON config overlay, e.g. stress10={"mechanisms":{"stress":{"enabled":true}}}
+            const std::string v = next();
+            const auto eq = v.find('=');
+            if (eq == std::string::npos) throw std::runtime_error("--variant expects NAME=JSON");
+            variants.emplace_back(v.substr(0, eq), nlohmann::json::parse(v.substr(eq + 1)));
+        }
         else if (a == "--out") out_prefix = next();
         else {
             std::fprintf(stderr,
                          "usage: adaptogen-compare [--suite baselines|mechanisms] [--runs N] [--population N]\n"
                          "         [--generations N] [--threads N] [--target NAME]... [--algorithm NAME]... [--out PREFIX]\n"
+                         "         [--seed-base N] [--no-validation] [--set JSON] [--variant NAME=JSON]...\n"
+                         "suites: baselines, mechanisms, custom (baseline + --variant entries)\n"
                          "targets: koza1 nguyen5 nguyen7 nguyen10 pagie1 keijzer6 list-sum list-max list-count_positive\n");
             return 1;
         }
@@ -161,9 +179,15 @@ int main(int argc, char** argv) {
     std::vector<Algorithm> algos;
     if (suite == "baselines") algos = baseline_suite();
     else if (suite == "mechanisms") algos = mechanism_suite();
+    else if (suite == "custom") algos = {mechanism_suite().front()};
     else {
         std::fprintf(stderr, "unknown suite '%s'\n", suite.c_str());
         return 1;
+    }
+    for (const auto& [name, overlay] : variants) {
+        const nlohmann::json o = overlay;
+        algos.push_back({name, "config overlay: " + o.dump(), run_adaptogen,
+                         [o](EngineConfig& c) { config_from_json(c, o); }});
     }
     if (out_prefix.empty()) out_prefix = "benchmarks/" + suite;
     if (!only.empty())
@@ -184,7 +208,9 @@ int main(int argc, char** argv) {
        << " independent runs per cell; each run samples its own data. \"Solved\" is judged on the **unseen test "
        << "set** (formulas: RMSE < 1% of the target's spread; lists: every test list answered exactly). "
        << "Runs stop early when the training set is solved. p = two-sided Fisher exact test of the solved "
-       << "count against the first algorithm in the table.\n\n### Algorithms\n\n";
+       << "count against the first algorithm in the table. Seeds start at " << seed_base << "."
+       << (validation ? " List benchmarks hold back 25% of the training cases to choose the final program." : "")
+       << (common.empty() ? std::string() : " Common config overlay: `" + common.dump() + "`.") << "\n\n### Algorithms\n\n";
     for (const auto& a : algos) md << "- **" << a.name << "**: " << a.description << "\n";
     md << "\n";
 
@@ -202,10 +228,12 @@ int main(int argc, char** argv) {
             std::vector<AlgoResult> results(static_cast<std::size_t>(runs));
             parallel_for(static_cast<std::size_t>(runs), threads, [&](std::size_t r) {
                 EngineConfig cfg;
-                cfg.seed = 1000 + r;
+                cfg.seed = seed_base + r;
                 cfg.population = population;
                 cfg.generations = generations;
                 cfg.threads = 1;  // parallelism is across runs
+                if (validation) cfg.validation_fraction = bench.validation_fraction;
+                config_from_json(cfg, common);
                 algo.configure(cfg);
                 auto problem = bench.make(cfg.seed);
                 results[r] = algo.run(*problem, cfg);

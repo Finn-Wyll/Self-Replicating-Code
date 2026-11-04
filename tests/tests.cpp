@@ -352,6 +352,60 @@ TEST(list_problem_accepts_a_hand_written_sum) {
     CHECK(effective_length(s, prog, 1) == 4);
 }
 
+TEST(validation_split_guards_the_final_choice) {
+    auto problem = ListProblem::from_params({{"task", "sum"}}, 2);
+    EngineConfig cfg;
+    cfg.seed = 2;
+    cfg.population = 80;
+    cfg.generations = 8;
+    cfg.validation_fraction = 0.25;
+    std::vector<GenerationReport> reps;
+    Engine e(*problem, cfg);
+    e.on_generation([&](const GenerationReport& r) { reps.push_back(r); });
+    e.run();
+    double last = -1e300;
+    for (const auto& r : reps) {
+        bool found = false;
+        for (const auto& st : r.population_stats)
+            if (st.name == "best_validation_score") {
+                found = true;
+                CHECK(st.value >= last - 1e-12);  // the champion's validation score never drops
+                last = st.value;
+            }
+        CHECK(found);
+    }
+    EngineConfig b;
+    config_from_json(b, config_to_json(cfg));
+    CHECK(b.validation_fraction == 0.25);
+}
+
+TEST(population_stress_trigger) {
+    EngineConfig cfg;
+    config_from_json(cfg, nlohmann::json::parse(R"({"mechanisms": {"stress": {"enabled": true, "trigger": "population", "patience": 2}}})"));
+    CHECK(cfg.mechanisms.stress.trigger == "population");
+    bool threw = false;
+    try {
+        EngineConfig d;
+        config_from_json(d, nlohmann::json::parse(R"({"mechanisms": {"stress": {"trigger": "sometimes"}}})"));
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    CHECK(threw);
+    // A tiny population on an unsolvable budget stagnates; the population-wide multiplier must kick in.
+    auto problem = FormulaProblem::from_params({{"target", "pagie1"}}, 1);
+    cfg.population = 20;
+    cfg.generations = 30;
+    cfg.seed = 1;
+    double max_stress = 0;
+    Engine e(*problem, cfg);
+    e.on_generation([&](const GenerationReport& r) {
+        for (const auto& st : r.population_stats)
+            if (st.name == "mean_stress_multiplier") max_stress = std::max(max_stress, st.value);
+    });
+    e.run();
+    CHECK(max_stress > 1.0);
+}
+
 int main() {
     for (auto& [name, fn] : tests()) {
         const int before = failures;
