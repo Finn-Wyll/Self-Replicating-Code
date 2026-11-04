@@ -15,6 +15,9 @@ nlohmann::json config_to_json(const EngineConfig& c);
 /// Overlay the keys present in j onto c (unknown keys raise an error).
 void config_from_json(EngineConfig& c, const nlohmann::json& j);
 
+/// Metrics as a JSON object {name: value}.
+nlohmann::json metrics_to_json(const std::vector<Metric>& metrics);
+
 nlohmann::json report_to_json(const GenerationReport& r);
 nlohmann::json result_to_json(const MachineSpec& spec, const EvolutionResult& r);
 

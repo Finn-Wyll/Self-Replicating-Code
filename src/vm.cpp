@@ -26,11 +26,29 @@ inline double pdiv(double a, double b) { return std::fabs(b) < 1e-9 ? 1.0 : a / 
 inline double plog(double a) { return std::fabs(a) < 1e-9 ? 0.0 : std::log(std::fabs(a)); }
 inline double pexp(double a) { return std::exp(std::min(a, 50.0)); }
 
+// Where each statement ends is asked again on every loop iteration and every skipped if, so it
+// is remembered per run. Entries carry the run's stamp instead of being cleared each run.
+struct EndMemo {
+    std::vector<std::uint32_t> end, stamp;
+    std::uint32_t current = 0;
+    void begin(std::size_t n) {
+        if (end.size() < n) {
+            end.resize(n);
+            stamp.resize(n, 0);
+        }
+        if (++current == 0) {  // stamp wrapped: forget everything once
+            std::fill(stamp.begin(), stamp.end(), 0);
+            current = 1;
+        }
+    }
+};
+
 struct Exec {
     const MachineSpec& spec;
     const std::vector<Instr>& code;
     Environment& env;
     double* r;
+    EndMemo* memo = nullptr;
     int steps = 0;
     bool hit = false;
 
@@ -38,14 +56,22 @@ struct Exec {
         const std::size_t n = code.size();
         if (i >= n) return n;
         const Op op = code[i].op;
-        if (op == Op::IfLt || op == Op::IfGe || op == Op::IfEq) return end_of(i + 1);
+        if (op != Op::IfLt && op != Op::IfGe && op != Op::IfEq && op != Op::Loop) return i + 1;
+        if (memo && memo->stamp[i] == memo->current) return memo->end[i];
+        std::size_t e;
         if (op == Op::Loop) {
             std::size_t j = i + 1;
             const int body = std::clamp<int>(code[i].c, 1, spec.limits.max_loop_body);
             for (int k = 0; k < body && j < n; ++k) j = end_of(j);
-            return j;
+            e = j;
+        } else {
+            e = end_of(i + 1);
         }
-        return i + 1;
+        if (memo) {
+            memo->end[i] = static_cast<std::uint32_t>(e);
+            memo->stamp[i] = memo->current;
+        }
+        return e;
     }
 
     // Executes the statement at i and returns the index after it.
@@ -112,7 +138,9 @@ struct Exec {
 }  // namespace
 
 RunStats run(const MachineSpec& spec, const Program& program, Environment& env, std::span<double> regs) {
-    Exec ex{spec, program.code, env, regs.data()};
+    thread_local EndMemo memo;
+    memo.begin(program.code.size());
+    Exec ex{spec, program.code, env, regs.data(), &memo};
     const std::size_t n = program.code.size();
     for (std::size_t i = 0; i < n && !ex.hit;) i = ex.exec(i);
     return {ex.steps, ex.hit};
@@ -122,7 +150,7 @@ std::size_t statement_end(const MachineSpec& spec, const Program& program, std::
     struct NullEnv : Environment {
         double sense(int, const double*, int) override { return 0; }
     } env;
-    Exec ex{spec, program.code, env, nullptr};
+    Exec ex{spec, program.code, env, nullptr, nullptr};
     return ex.end_of(i);
 }
 

@@ -210,11 +210,16 @@ EvolutionResult Engine::run() {
     // ---- selection helpers -------------------------------------------------------------
     std::vector<double> eps(S), column(P);
     std::vector<double> matrix;  // case-major copy of the scores: matrix[k * P + i] (cache-friendly lexicase)
+    std::vector<double> col_max;  // best score per case over the whole population (lexicase's first filter)
     auto build_matrix = [&](const std::vector<Individual>& pop) {
         if (cfg_.selection != SelectionMethod::Lexicase) return;
         matrix.resize(S * P);
+        col_max.assign(S, -1e300);
         for (std::size_t i = 0; i < P; ++i)
-            for (std::size_t k = 0; k < S; ++k) matrix[k * P + i] = pop[i].scores[k];
+            for (std::size_t k = 0; k < S; ++k) {
+                matrix[k * P + i] = pop[i].scores[k];
+                col_max[k] = std::max(col_max[k], pop[i].scores[k]);
+            }
     };
     std::vector<std::size_t> case_rank(S), cand, keep, order;
     std::iota(case_rank.begin(), case_rank.end(), 0);  // easiest first (curriculum)
@@ -257,8 +262,20 @@ EvolutionResult Engine::run() {
         order.assign(case_rank.begin(), case_rank.begin() + static_cast<long>(active));
         for (std::size_t i = order.size(); i > 1; --i) std::swap(order[i - 1], order[rng.below(i)]);
         cand.clear();
-        for (std::size_t k = 0; k < n; ++k) cand.push_back(at(k));
-        for (std::size_t c : order) {
+        std::size_t first = 0;
+        if (!pool && !order.empty()) {
+            // Whole population: the first case's best is known, so filter straight from it.
+            const std::size_t c = order[0];
+            const double* col = matrix.data() + c * P;
+            const double cut = col_max[c] - eps[c];
+            for (std::size_t i = 0; i < n; ++i)
+                if (col[i] >= cut) cand.push_back(i);
+            first = 1;
+        } else {
+            for (std::size_t k = 0; k < n; ++k) cand.push_back(at(k));
+        }
+        for (std::size_t oi = first; oi < order.size() && cand.size() > 1; ++oi) {
+            const std::size_t c = order[oi];
             const double* col = matrix.data() + c * P;
             double best = -1e300;
             for (std::size_t i : cand) best = std::max(best, col[i]);
@@ -408,6 +425,11 @@ EvolutionResult Engine::run() {
         }
     };
 
+    Program champion_program;
+    std::vector<Metric> champion_metrics;
+    std::size_t champion_effective = 0;
+    bool champion_solved = false, champion_cached = false;
+
     int gen = 0;
     evaluate(pop);
     for (;; ++gen) {
@@ -466,9 +488,17 @@ EvolutionResult Engine::run() {
         rep.best_fitness = hall_of_fame.fitness;  // champion's fitness on the selection cases
         rep.mean_fitness = sum_fit / Pd;
         rep.best_length = static_cast<double>(bp.size());
-        rep.best_effective_length = static_cast<double>(effective_length(spec_, bp, outputs));
+        // The champion often survives many generations: score it (metrics, solved) only when it changes.
+        if (!champion_cached || champion_program != bp) {
+            champion_program = bp;
+            champion_metrics = problem_.metrics(spec_, bp, Split::Train);
+            champion_effective = effective_length(spec_, bp, outputs);
+            champion_solved = cfg_.stop_when_solved && problem_.solved(spec_, bp, Split::Train);
+            champion_cached = true;
+        }
+        rep.best_effective_length = static_cast<double>(champion_effective);
         rep.mean_length = sum_len / Pd;
-        rep.best_train_metrics = problem_.metrics(spec_, bp, Split::Train);
+        rep.best_train_metrics = champion_metrics;
         rep.population_stats = {{"mean_mutation_rate", mech.hypermutation.enabled ? sum_rate / Pd : var.p_mutation},
                                 {"mean_stress_multiplier", sum_stress / Pd},
                                 {"max_stagnation", static_cast<double>(max_stag)},
@@ -481,7 +511,7 @@ EvolutionResult Engine::run() {
         transfers = duplications = cache_hits = tuned = 0;
         if (callback_) callback_(rep);
 
-        const bool solved = cfg_.stop_when_solved && problem_.solved(spec_, bp, Split::Train);
+        const bool solved = champion_solved;
         const long next_cost = static_cast<long>(P * S) * (spatial && downsampling ? 2 : 1);
         const bool budget = (cfg_.max_program_evaluations > 0 &&
                              evaluations + static_cast<long>(P) > cfg_.max_program_evaluations) ||
