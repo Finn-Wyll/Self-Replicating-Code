@@ -4,6 +4,3 @@ build-*/
 .cache/
 compile_commands.json
 runs/
-# benchmark outputs while a run is in progress (added explicitly when complete)
-benchmarks/mechanisms.*
-benchmarks/baselines.*
