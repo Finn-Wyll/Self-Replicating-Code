@@ -145,13 +145,24 @@ can transfer between them.
 ./build/adaptogen evolve --problem scheduling --save-strain my-scheduler
 ```
 
-First results (one run each, seed 1, unseen test instances):
+First results: one run each, seed 1, scored on unseen test instances. The default 1000
+generations were used, except 300 for meals, bills, energy and foraging.
 
-| Problem | evolved rule | best reference rule |
+| Problem | evolved | best reference rule |
 |---|---|---|
 | scheduling: weighted lateness (lower is better) | **92.9** | 147.7 (weighted shortest job first) |
 | errands: score (higher is better) | **0.954** | 0.953 (earliest closing first) |
 | packing: share of the optimum | **99.1%** (70% exactly optimal) | 98.7% (best value per kg) |
+| meals: cost relative to the simple rule | **0.80** (20% cheaper), but targets met on 96.7% of days | 1.00 |
+| energy: cost + discomfort (lower is better) | **34.4** (−18%) | 41.8 (standard thermostat) |
+| foraging: food eaten | **100%** on every test grid (a 2-instruction controller) | – |
+| bills: net worth / income | 0.384 | 0.383 (pay by due date, save half): a tie |
+
+These are single runs, not statistics. Clear wins: scheduling, energy and meals (with a small
+reliability trade-off). Errands and packing reach about the level of the best simple rule.
+`bills` evolved a one-instruction program that ties the simple rule: as designed, the problem
+leaves little room to beat it, and it needs harder cases (tighter money, larger surprises) to
+be interesting.
 
 ## Bacteria-inspired mechanisms
 
