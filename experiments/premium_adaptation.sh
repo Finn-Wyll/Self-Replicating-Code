@@ -1,5 +1,5 @@
 #!/bin/bash
-cd /home/user/Self-Replicating-Code
+cd "$(dirname "$0")/.."  # run from the repository root
 L=${LIBRARY:-benchmarks/strains}   # contains courier-picker-v1
 D=examples/data/couriers_premium.csv
 acc() { python3 -c "import json,sys; r=[json.loads(l) for l in sys.stdin][-1]; print(r['test_metrics']['accuracy'], r['test_metrics']['linear_model_accuracy'], r['test_metrics']['best_single_feature_accuracy'])"; }
