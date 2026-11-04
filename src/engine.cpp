@@ -108,15 +108,17 @@ EvolutionResult Engine::run() {
     }
     const int bands = curriculum ? std::clamp(mech.curriculum.bands, 1, std::max(1, W)) : 1;
 
-    if (curriculum && cfg_.downsample < 1.0)
-        throw std::runtime_error("the curriculum cannot be combined with down-sampling");
 
     long evaluations = 0, case_evaluations = 0, cache_hits = 0, tuned = 0;
     long transfers = 0, duplications = 0;
 
     // Cases scored this generation: positions into fit_cases. All of them unless down-sampling.
-    const bool downsampling = cfg_.downsample < 1.0 && C > 1;
-    const std::size_t S = downsampling ? std::max<std::size_t>(1, static_cast<std::size_t>(std::ceil(cfg_.downsample * static_cast<double>(C)))) : C;
+    // (The curriculum ranks every case each generation, so it always uses all of them.)
+    const std::size_t sample =
+        std::max<std::size_t>({1, static_cast<std::size_t>(std::ceil(cfg_.downsample * static_cast<double>(C))),
+                               std::min<std::size_t>(C, static_cast<std::size_t>(std::max(1, cfg_.downsample_min_cases)))});
+    const bool downsampling = !curriculum && cfg_.downsample < 1.0 && sample < C;
+    const std::size_t S = downsampling ? sample : C;
     std::vector<std::size_t> active(C);
     std::iota(active.begin(), active.end(), 0);
     auto resample = [&] {

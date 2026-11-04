@@ -229,6 +229,7 @@ TEST(engine_improves_on_koza1) {
     cfg.seed = 11;
     cfg.population = 300;
     cfg.generations = 60;
+    cfg.downsample = 1.0;  // every case each generation
     std::vector<double> best;
     Engine e(*problem, cfg);
     e.on_generation([&](const GenerationReport& r) { best.push_back(r.best_fitness); });
@@ -575,6 +576,28 @@ TEST(simplifier_never_makes_any_case_worse) {
     CHECK(shrunk > 30);
 }
 
+TEST(downsampling_minimum_sample_and_curriculum) {
+    // 6 training cases at 10% would be a single case: the minimum keeps 3.
+    Dataset d;
+    d.variables = {"x"};
+    for (int i = 0; i < 6; ++i) {
+        d.x.push_back({static_cast<double>(i)});
+        d.y.push_back(i * 2.0);
+    }
+    FormulaProblem tiny("tiny", "", d, d);
+    EngineConfig cfg;
+    cfg.population = 10;
+    cfg.generations = 4;
+    cfg.stop_when_solved = false;
+    const auto r = Engine(tiny, cfg).run();
+    CHECK(r.case_evaluations == 4L * (10 * 3 + 6));
+    // The curriculum always scores every case (down-sampling is ignored rather than an error).
+    cfg.mechanisms.spatial.enabled = cfg.mechanisms.curriculum.enabled = true;
+    cfg.population = 9;
+    const auto c = Engine(tiny, cfg).run();
+    CHECK(c.case_evaluations == 4L * 9 * 6);
+}
+
 TEST(downsampling_and_case_budget) {
     auto problem = ListProblem::from_params({{"task", "sum"}}, 3);  // 100 training cases
     EngineConfig cfg;
@@ -615,6 +638,7 @@ TEST(duplicate_cache_changes_nothing_but_cost) {
     cfg.population = 80;
     cfg.generations = 15;
     cfg.stop_when_solved = false;
+    cfg.downsample = 1.0;  // the cache only applies when scores stay valid across generations
     const auto plain = Engine(*problem, cfg).run();
     cfg.cache_duplicates = true;
     const auto cached = Engine(*problem, cfg).run();

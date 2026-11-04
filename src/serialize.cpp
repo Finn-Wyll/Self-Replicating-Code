@@ -236,6 +236,7 @@ json config_to_json(const EngineConfig& c) {
         {"validation_fraction", c.validation_fraction},
         {"max_case_evaluations", c.max_case_evaluations},
         {"downsample", c.downsample},
+        {"downsample_min_cases", c.downsample_min_cases},
         {"cache_duplicates", c.cache_duplicates},
         {"constant_tuning",
          {{"enabled", c.constant_tuning.enabled},
@@ -291,7 +292,8 @@ void config_from_json(EngineConfig& c, const json& j) {
         else if (key == "downsample") {
             c.downsample = val.get<double>();
             if (!(c.downsample > 0 && c.downsample <= 1)) throw std::runtime_error("downsample must be in (0, 1]");
-        } else if (key == "cache_duplicates") c.cache_duplicates = val.get<bool>();
+        } else if (key == "downsample_min_cases") c.downsample_min_cases = val.get<int>();
+        else if (key == "cache_duplicates") c.cache_duplicates = val.get<bool>();
         else if (key == "constant_tuning") {
             if (val.is_boolean()) c.constant_tuning.enabled = val.get<bool>();
             else {

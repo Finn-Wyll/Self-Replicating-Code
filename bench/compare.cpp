@@ -250,6 +250,10 @@ int main(int argc, char** argv) {
                 cfg.population = population;
                 cfg.generations = generations;
                 cfg.threads = 1;  // parallelism is across runs
+                // Experiments are defined in "generations of full evaluation" (the engine's default
+                // before down-sampling became the default), so published results stay reproducible.
+                // Variants that want down-sampling set it explicitly, usually with --case-budget-gens.
+                cfg.downsample = 1.0;
                 if (validation) cfg.validation_fraction = bench.validation_fraction;
                 config_from_json(cfg, common);
                 algo.configure(cfg);

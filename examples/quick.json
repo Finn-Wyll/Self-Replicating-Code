@@ -1,6 +1,6 @@
 {
   "population": 300,
-  "generations": 80,
+  "generations": 800,
   "selection": "lexicase",
   "length_cost": 0.0
 }

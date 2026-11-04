@@ -41,24 +41,27 @@ cmake --build build -j
 Rediscover Kepler's third law from real planet data (`examples/data/kepler.csv`):
 
 ```bash
-./build/adaptogen evolve --problem formula --param data=examples/data/kepler.csv --population 500 --generations 150 --selection tournament --set length_cost=0.02 --seed 3
+./build/adaptogen evolve --problem formula --param data=examples/data/kepler.csv --population 500 --generations 300 --selection tournament --set length_cost=0.02 --seed 1
 ```
 
 ```
-SOLVED after 21 generations (10480 program evaluations, 0.0s)
+SOLVED after 26 generations (13000 program evaluations, 0.0s)
   train: r2=0.999999 ...
   test (unseen): r2=0.999998 ...  [solved]
 
-evolved program (26 instructions, 3 effective):
+simplified from 32 to 3 instructions (same score on every training case)
+evolved program (3 instructions, 3 effective):
 # all registers start at 0; output: r0
-r4 = planet_distance_au
-r7 = sqrt(|r4|)
-r0 = r4 * r7
+r0 = planet_distance_au
+r1 = sqrt(|r0|)
+r0 = r0 * r1
 ```
 
-That's `period = distance × √distance`, i.e. T² = a³. The other 23 instructions are
-non-coding "junk DNA" that has no effect (shown with `--all`). It is raw material that later
-mutations can turn into something new.
+That's `period = distance × √distance`, i.e. T² = a³. The evolved program had 32 instructions;
+the other 29 were non-coding "junk DNA" with no effect. During evolution that junk is raw
+material later mutations can turn into something new. In the final answer it is removed
+(`--no-simplify` keeps it). With other seeds evolution sometimes finds only an approximation;
+it is a search, not a guarantee.
 
 Other commands:
 
@@ -104,6 +107,17 @@ change what it does.
 
 **Selection.** `lexicase` (default) picks parents that excel on randomly ordered individual cases,
 which keeps specialists alive as stepping stones. `tournament` compares overall average scores.
+
+**Down-sampling (on by default).** Each generation, programs are scored on a fresh random 10% of
+the training cases (`"downsample": 0.1`, at least `"downsample_min_cases": 3`). The final champion
+is always judged on all of them. The same compute then buys about ten times more generations.
+In benchmarks this nearly **tripled** the solved runs and made adaptogen significantly better
+than classic tree GP ([benchmarks/RESULTS.md](benchmarks/RESULTS.md) §6). Because each generation
+is cheaper, the default generation limit is 1000. Set `"downsample": 1` to score every case.
+
+Optional extras: `"constant_tuning": true` (local search on the constants of the best programs;
+no significant gain in benchmarks) and `"cache_duplicates": true` (offspring identical to a parent
+reuse its scores; same results, ~3% fewer evaluations, only without down-sampling).
 
 ## Bacteria-inspired mechanisms
 

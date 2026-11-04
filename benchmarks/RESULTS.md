@@ -301,3 +301,74 @@ Head-to-head (Fisher exact on solved counts; Mann–Whitney on the accuracy dist
    Stepping-stone strains (e.g. a "count items" strain) or a longer budget are the next things to try.
 5. **Practical consequence:** strains are now simplified by default when saved from `evolve`, and
    `strains simplify ID` cleans up older ones.
+
+## 6. Improving the core algorithm: down-sampling nearly triples success
+
+Three generic improvements were added as switches. Budgets are counted in **single case
+evaluations** (one program on one case), the fair unit when settings score programs on
+different numbers of cases. `--case-budget-gens 100` gives every variant the compute of 100
+generations of full evaluation.
+
+- **Down-sampled lexicase** (`downsample`): each generation scores programs on a fresh random
+  fraction of the training cases, and the champion is re-judged on all of them. The same
+  compute buys many more generations.
+- **Constant tuning** (`constant_tuning`): a (1+1) local search on the effective constants of
+  the best program(s) each generation, written back into the population.
+- **Duplicate cache** (`cache_duplicates`): offspring identical to their mother reuse her scores.
+
+Speed: lexicase selection now works on a case-major score matrix, about 15% faster on problems
+with few cases. (A memo for loop/if boundaries in the VM was tried and reverted: no gain.)
+
+### Tuning sweep (seeds 8000+, 7 benchmarks × 20 runs = 140 per setting)
+
+Tables: [improve-sweep.md](improve-sweep.md), [improve-sweep2.md](improve-sweep2.md).
+
+| Setting | solved (of 140) |
+|---|---|
+| baseline (all cases every generation) | 21 |
+| down-sampling 0.5 / 0.25 / **0.1** / 0.05 | 19 / 39 / **57** / 53 |
+| constant tuning (top 1 / top 5) | 19 / 18 |
+| duplicate cache | 22 (identical results, ~3% fewer evaluations) |
+| down-sampling 0.25 / 0.1 / 0.05 + constant tuning | 47 / 48 / **69** |
+
+### Confirmation on fresh seeds (9000+, all 9 benchmarks × 20 runs)
+
+Table: [improve-final.md](improve-final.md), data: [improve-final.csv](improve-final.csv).
+Tree GP gets the same budget (100 generations, every case).
+
+| Variant | koza1 | ng5 | ng7 | ng10 | pagie1 | keij6 | list-sum | list-max | list-count+ | **total (of 180)** | formulas (of 120) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| baseline | 6 | 0 | 1 | 2 | 0 | 6 | 4 | 3 | 0 | 22 | 15 |
+| tree GP (reference) | 6 | 1 | 6 | 1 | 0 | 8 | – | – | – | – | 22 |
+| **down-sampling 0.1** | 11 | 2 | 5 | **12** | 0 | **13** | **12** | **6** | 0 | **61** | 43 |
+| down-sampling 0.05 + constant tuning | **14** | 2 | **6** | 9 | 0 | **13** | 11 | 4 | 0 | 59 | **44** |
+
+Pooled Cochran–Mantel–Haenszel tests (stratified by benchmark):
+
+- down-sampling 0.1 vs baseline: **p = 2·10⁻⁷**. vs tree GP on the formula benchmarks: **p = 0.002**.
+- down-sampling 0.05 + constant tuning vs baseline: **p = 6·10⁻⁷**. vs tree GP: **p = 0.0009**.
+
+Median test quality also improved on the unsolved problems: pagie1 R² 0.898 → 0.920 (tree GP
+0.694); list-max accuracy 0.14 → 0.98.
+
+### Findings
+
+1. **Down-sampling is the single biggest improvement so far.** It nearly triples solved runs at
+   equal compute (61 vs 22, p = 2·10⁻⁷). It improves every benchmark that anything solves, and it
+   lifts adaptogen from "on par with tree GP" to **significantly better** (43 vs 22 on formulas).
+   This matches the program-synthesis literature (Hernandez et al. 2019, "random subsampling
+   improves performance in lexicase selection").
+2. **Constant tuning adds nothing reliable.** Alone it is slightly worse (it spends compute on
+   only the top programs). Combined with down-sampling it was best in tuning (69) but equal to
+   plain down-sampling on fresh seeds (59 vs 61). It stays optional and off.
+3. **The duplicate cache is correct but small.** Only ~3% of offspring are exact copies of their
+   mother. Optional and off.
+4. **Very small datasets need a minimum sample.** On the 6-point Kepler data, 10% means one case
+   per generation, which hurt (2/8 solved vs 5/8 with all cases, at equal compute). Three cases
+   per generation was best (6/8). Hence `downsample_min_cases = 3`.
+5. **New defaults:** `downsample = 0.1` (at least 3 cases) and a generation limit of 1000 instead
+   of 100, so a default run spends about the same compute as before. Configs that relied on the
+   old defaults can set `"downsample": 1`. `adaptogen-compare` pins `downsample = 1` unless a
+   variant sets it, so every earlier table in this file stays reproducible.
+6. **Still unsolved:** pagie1 and count_positive (0/20 for everything). Both need longer runs or
+   further ideas (e.g. stepping-stone strains for count_positive).

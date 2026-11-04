@@ -64,7 +64,7 @@ struct Mechanisms {
 struct EngineConfig {
     std::uint64_t seed = 1;
     int population = 500;
-    int generations = 100;
+    int generations = 1000;
     int elitism = 1;
     SelectionMethod selection = SelectionMethod::Lexicase;
     int tournament_size = 4;
@@ -84,9 +84,12 @@ struct EngineConfig {
     long max_case_evaluations = 0;
 
     /// Down-sampled lexicase/tournament: each generation, programs are scored on a fresh random
-    /// fraction of the training cases (1 = all). The same budget then buys more generations. The
-    /// champion is always judged on all training cases.
-    double downsample = 1.0;
+    /// fraction of the training cases (1 = all), but at least `downsample_min_cases`. The same
+    /// compute then buys many more generations; the champion is always judged on all training
+    /// cases. On by default (0.1): in benchmarks it nearly tripled solved runs at equal compute
+    /// (benchmarks/RESULTS.md, section 6). The curriculum mechanism always uses all cases.
+    double downsample = 0.1;
+    int downsample_min_cases = 3;
     /// Offspring identical to a parent reuse the parent's scores instead of being re-evaluated
     /// (only without down-sampling, where scores stay valid across generations).
     bool cache_duplicates = false;
