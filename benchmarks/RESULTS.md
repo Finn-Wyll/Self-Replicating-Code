@@ -372,3 +372,34 @@ Median test quality also improved on the unsolved problems: pagie1 R² 0.898 →
    variant sets it, so every earlier table in this file stays reproducible.
 6. **Still unsolved:** pagie1 and count_positive (0/20 for everything). Both need longer runs or
    further ideas (e.g. stepping-stone strains for count_positive).
+
+## 7. Deriving a new problem from a strain (stage 4 plug-ins)
+
+[examples/plugins/weighted_sum.cpp](../examples/plugins/weighted_sum.cpp) is a plug-in generated with
+`adaptogen plugin new weighted_sum --from list-sum-v6`. Its base class fixes the parent strain's
+channels (`list.length`, `list.item`) and the plug-in adds `list.weight`. The task is
+Σ item × weight, with integer weights 0–5 and test lists up to 2.5× longer than training lists.
+"Seeded" runs start from the parent strain (`--seed-parents`); "scratch" runs start from random
+programs. Down-sampling 0.1, population 500.
+
+| Budget | from scratch | seeded from parent `list-sum-v6` |
+|---|---|---|
+| 2,000 generations, 10 runs each (seeds 10000+, [derived.md](derived.md)) | 0/10 solved (median test accuracy 0.000) | 0/10 solved (median 0.005) |
+| 5,000 generations, seeds 1–3 | **0/3** solved (training accuracy 0.00–0.03) | **3/3** solved (training accuracy 1.0) |
+| 5,000 generations, seeds 1–2 (first try) | – | 2/2 solved (after 1,200 and 4,426 generations; seed 1 also 100% on test) |
+
+**Findings (preliminary, few runs):**
+
+1. **Inheriting from a strain helps on a harder derived task, given enough time.** Every seeded run
+   with 5,000 generations solved it (5/5); none of the scratch runs did (0/3). With so few runs
+   this is suggestive (Fisher p = 0.1 for 3/3 vs 0/3), not proven. At 2,000 generations neither
+   setting solves it.
+2. **The solution is new code, not a tweak.** There is no multiply step in the inherited loop to
+   repurpose. Evolution nested a second loop that adds each item `weight` times, deferring each
+   addition by one step: multiplication by repeated addition. That is valid only because the
+   weights are whole numbers, which evolution exploited. The resulting strain `weighted-sum-v1`
+   records `list-sum-v6` as its parent (lineage `weighted-sum-v1` ← `list-sum-v6` ← `list-sum-v1`).
+3. **Why it takes long:** extending the parent's loop needs new instructions *inside* the loop body,
+   but a loop body is "the next N statements". An inserted instruction pushes the last one out of
+   the loop. Mutation operators that respect block structure (insertion that grows the enclosing
+   body) are a promising next improvement for transfer.
