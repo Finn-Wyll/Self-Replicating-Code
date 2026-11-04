@@ -79,7 +79,11 @@ const Channel* find_channel(const std::vector<Channel>& chans, const std::string
     return nullptr;
 }
 
-std::string mapped_name(const ChannelMap& map, const std::string& name) {
+// Map a strain's channel name: "strain-id:name" or "strain-name:name" entries apply to that strain
+// only (multiple inheritance with renamed conflicts); plain "name" entries to every strain.
+std::string mapped_name(const ChannelMap& map, const Strain& strain, const std::string& name) {
+    for (const auto& [from, to] : map)
+        if (from == strain.id + ":" + name || from == strain.name + ":" + name) return to;
     for (const auto& [from, to] : map)
         if (from == name) return to;
     return name;
@@ -320,7 +324,7 @@ Compatibility check_compatibility(const Strain& strain, const std::vector<Channe
     for (std::size_t i = 0; i < strain.channels.size(); ++i) {
         const Channel& sc = strain.channels[i];
         const bool used = i < strain.channel_used.size() && strain.channel_used[i];
-        const std::string target = mapped_name(map, sc.name);
+        const std::string target = mapped_name(map, strain, sc.name);
         const Channel* pc = find_channel(problem_channels, target, sc.kind);
         // "*" marks channels the strain's code actually uses (see coverage()).
         const std::string label = (used ? "*" : "") + sc.name + (target != sc.name ? " -> " + target : "");
@@ -356,7 +360,7 @@ Program revive(const Strain& strain, const MachineSpec& target, const ChannelMap
         const std::string op = in.value("op", "");
         const ChannelKind kind = op == "act" ? ChannelKind::Action : ChannelKind::Sensor;
         const Channel* sc = find_channel(strain.channels, name, kind);
-        const std::string mapped = mapped_name(map, name);
+        const std::string mapped = mapped_name(map, strain, name);
         const Channel* tc = find_channel(target.channels, mapped, kind);
         in["channel"] = (tc && sc && tc->arity == sc->arity) ? mapped : "";  // "" -> pseudogene
     }

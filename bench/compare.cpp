@@ -13,6 +13,7 @@
 
 #include "adaptogen/engine.hpp"
 #include "adaptogen/problems/formula.hpp"
+#include "adaptogen/plugin.hpp"
 #include "adaptogen/problems/lists.hpp"
 #include "adaptogen/serialize.hpp"
 #include "baselines.hpp"
@@ -149,6 +150,7 @@ int main(int argc, char** argv) {
     bool validation = true, reference = false;
     std::vector<std::string> targets, only;
     std::vector<std::pair<std::string, nlohmann::json>> variants;
+    std::vector<std::pair<std::string, std::string>> plugin_targets;  // NAME=PATH
     nlohmann::json common = nlohmann::json::object();
     std::string suite = "baselines", out_prefix;
     for (int i = 1; i < argc; ++i) {
@@ -168,6 +170,12 @@ int main(int argc, char** argv) {
         else if (a == "--case-budget-gens") case_budget_gens = std::stoi(next());
         else if (a == "--no-validation") validation = false;
         else if (a == "--reference") reference = true;  // add tree GP (formula benchmarks) as a reference
+        else if (a == "--plugin-target") {  // NAME=PATH: a plug-in problem as an extra benchmark
+            const std::string v = next();
+            const auto eq = v.find('=');
+            if (eq == std::string::npos) throw std::runtime_error("--plugin-target expects NAME=PATH");
+            plugin_targets.emplace_back(v.substr(0, eq), v.substr(eq + 1));
+        }
         else if (a == "--set") {  // config overlay applied to every adaptogen run, e.g. --set '{"length_cost":0.01}'
             common.update(nlohmann::json::parse(next()));
         } else if (a == "--variant") {  // NAME=JSON config overlay, e.g. stress10={"mechanisms":{"stress":{"enabled":true}}}
@@ -184,6 +192,7 @@ int main(int argc, char** argv) {
                          "         [--seed-base N] [--no-validation] [--set JSON] [--variant NAME=JSON]...\n"
                          "         [--case-budget-gens N]  (budget = population x N x training cases, in case evaluations)\n"
                          "         [--reference]  (custom suite: add tree GP on formula benchmarks)\n"
+                         "         [--plugin-target NAME=PATH]...  (plug-in problems as extra benchmarks)\n"
                          "suites: baselines, mechanisms, custom (baseline + --variant entries)\n"
                          "targets: koza1 nguyen5 nguyen7 nguyen10 pagie1 keijzer6 list-sum list-max list-count_positive\n");
             return 1;
@@ -208,6 +217,17 @@ int main(int argc, char** argv) {
         std::erase_if(algos, [&](const Algorithm& a) { return std::find(only.begin(), only.end(), a.name) == only.end(); });
 
     std::vector<Benchmark> benches = all_benchmarks();
+    for (const auto& [name, path] : plugin_targets) {
+        auto probe = make_plugin_problem(path, nlohmann::json::object(), 1);  // builds once, checks it loads
+        const auto ms = probe->metrics(make_machine(*probe, EngineConfig{}), Program{}, Split::Test);
+        const std::string p = path;
+        benches.push_back({name, probe->description(), ms.empty() ? "score" : ms[0].name,
+                           [p](std::uint64_t seed) -> std::unique_ptr<Problem> {
+                               return make_plugin_problem(p, nlohmann::json::object(), seed);
+                           },
+                           false, 0.25});
+        targets.push_back(name);
+    }
     if (!targets.empty())
         std::erase_if(benches, [&](const Benchmark& b) { return std::find(targets.begin(), targets.end(), b.name) == targets.end(); });
     else if (suite == "baselines")

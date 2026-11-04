@@ -71,6 +71,14 @@ public:
 
     /// Mean case score over a split.
     double mean_score(const MachineSpec& spec, const Program& program, Split split) const;
+
+    /// Score several programs on the same cases: scores is programs x cases (row-major), steps the
+    /// executed instructions per program. The engine scores everything through this, so a problem
+    /// living elsewhere (a plug-in in a worker process) can ship whole batches at once.
+    /// Default: evaluate_case for every (program, case), programs in parallel.
+    virtual void evaluate_batch(const MachineSpec& spec, const std::vector<const Program*>& programs, Split split,
+                                const std::vector<std::size_t>& cases, int threads, std::vector<double>& scores,
+                                std::vector<long>& steps) const;
 };
 
 }  // namespace adaptogen

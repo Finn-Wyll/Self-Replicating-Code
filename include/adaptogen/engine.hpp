@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "adaptogen/parallel.hpp"
 #include "adaptogen/problem.hpp"
 #include "adaptogen/variation.hpp"
 
@@ -169,8 +170,6 @@ private:
     std::function<void(const GenerationReport&)> callback_;
 };
 
-/// Run fn(i) for i in [0, n) on up to `threads` threads (0 = hardware concurrency).
-void parallel_for(std::size_t n, int threads, const std::function<void(std::size_t)>& fn);
 
 const char* to_string(SelectionMethod m);
 

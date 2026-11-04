@@ -5,6 +5,7 @@
 
 #include "adaptogen/problems/formula.hpp"
 #include "adaptogen/problems/lists.hpp"
+#include "adaptogen/plugin.hpp"
 
 namespace adaptogen {
 
@@ -49,9 +50,10 @@ void register_builtin_problems() {
 const std::vector<ProblemEntry>& registered_problems() { return entries(); }
 
 std::unique_ptr<Problem> make_problem(const std::string& name, const nlohmann::json& params, std::uint64_t seed) {
+    if (name.rfind("plugin:", 0) == 0) return make_plugin_problem(name.substr(7), params, seed);
     for (const auto& e : entries())
         if (e.name == name) return e.factory(params, seed);
-    throw std::runtime_error("unknown problem '" + name + "' (try: adaptogen list)");
+    throw std::runtime_error("unknown problem '" + name + "' (try: adaptogen list, or plugin:FILE.cpp)");
 }
 
 }  // namespace adaptogen

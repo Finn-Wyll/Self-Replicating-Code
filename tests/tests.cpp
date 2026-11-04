@@ -12,6 +12,7 @@
 #include "adaptogen/problems/lists.hpp"
 #include "adaptogen/registry.hpp"
 #include "adaptogen/serialize.hpp"
+#include "adaptogen/plugin.hpp"
 #include "adaptogen/simplify.hpp"
 #include "adaptogen/strain.hpp"
 
@@ -669,6 +670,99 @@ TEST(constant_tuning_improves_constants) {
     const auto res = Engine(problem, cfg).run();
     CHECK(res.best.code.size() == 1 && res.best.code[0].op == Op::Const);
     CHECK(std::fabs(res.best.code[0].imm - 2.718) < 0.05);
+}
+
+namespace {
+std::string fixture(const char* name) { return std::string(ADAPTOGEN_TEST_DATA_DIR) + "/plugins/" + name; }
+Program constant_program(double v) { return Program{{I(Op::Const, 0, 0, 0, 0, v)}}; }
+}  // namespace
+
+TEST(plugin_crashes_and_hangs_are_contained) {
+    auto p = make_plugin_problem(fixture("misbehaving.cpp"), nlohmann::json::object(), 1);
+    p->timeout_seconds = 2;
+    const MachineSpec spec = make_machine(*p, EngineConfig{});
+    // good, crasher, hanger, NaN, good: only the bad ones are penalised.
+    const Program good = constant_program(4), crash = constant_program(5000), hang = constant_program(-5000),
+                  nan = constant_program(777);
+    std::vector<const Program*> batch = {&good, &crash, &hang, &nan, &good};
+    std::vector<std::size_t> cases = {2, 3};
+    std::vector<double> scores;
+    std::vector<long> steps;
+    p->evaluate_batch(spec, batch, Split::Train, cases, 2, scores, steps);
+    CHECK(scores.size() == 10);
+    CHECK(scores[0] == 0.0 && scores[1] == -2.0);  // r0 = 4 vs 2x = 4 and 6
+    CHECK(scores[2] == PluginProblem::kFailureScore && scores[3] == PluginProblem::kFailureScore);  // crash
+    CHECK(scores[4] == PluginProblem::kFailureScore && scores[5] == PluginProblem::kFailureScore);  // hang
+    CHECK(scores[6] == PluginProblem::kFailureScore);                                               // NaN
+    CHECK(scores[8] == 0.0 && scores[9] == -2.0);
+    CHECK(p->failures() == 2);
+    // The problem keeps working after the failures (workers were restarted).
+    std::vector<const Program*> again = {&good};
+    p->evaluate_batch(spec, again, Split::Test, {4}, 1, scores, steps);
+    CHECK(scores.size() == 1 && scores[0] == -4.0);
+    // Evolution on it runs to completion despite crashing programs.
+    EngineConfig cfg;
+    cfg.population = 30;
+    cfg.generations = 5;
+    cfg.const_min = -6000;
+    cfg.const_max = 6000;
+    const auto res = Engine(*p, cfg).run();
+    CHECK(res.generations >= 1);
+}
+
+TEST(plugin_build_reports_compile_errors) {
+    const BuildResult b = build_plugin(fixture("broken.cpp"));
+    CHECK(!b.ok);
+    bool found = false;
+    for (const auto& d : b.diagnostics) found = found || (d.severity == "error" && d.line == 9);
+    CHECK(found);
+    bool threw = false;
+    try {
+        make_plugin_problem(fixture("broken.cpp"), nlohmann::json::object(), 1);
+    } catch (const std::exception& e) {
+        threw = std::string(e.what()).find("does not compile") != std::string::npos;
+    }
+    CHECK(threw);
+}
+
+TEST(plugin_validation_checks_inheritance) {
+    const auto lib = std::filesystem::path(ADAPTOGEN_TEST_DATA_DIR).parent_path().parent_path() / "benchmarks" / "strains";
+    const ValidationReport bad = validate_plugin(fixture("redefines.cpp"), nlohmann::json::object(), 1, lib);
+    CHECK(!bad.ok);
+    bool redefined = false;
+    for (const auto& e : bad.errors) redefined = redefined || e.find("redefined") != std::string::npos;
+    CHECK(redefined);
+    const ValidationReport nan = validate_plugin(fixture("misbehaving.cpp"), nlohmann::json::object(), 1, lib);
+    CHECK(nan.info.value("name", "") == "misbehaving");
+}
+
+TEST(base_header_merges_and_detects_conflicts) {
+    auto sum = ListProblem::from_params({{"task", "sum"}}, 1);
+    Strain a = sum_strain(*sum, EngineConfig{});
+    a.id = "a-v1";
+    a.name = "a";
+    Strain b = a;  // same interface: merged (diamond)
+    b.id = "b-v1";
+    b.name = "b";
+    const std::string h = generate_base_header({a, b}, "MergedBase");
+    CHECK(h.find("class MergedBase") != std::string::npos);
+    CHECK(h.find("kInheritedChannels = 2") != std::string::npos);
+    CHECK(h.find("\"a-v1\", \"b-v1\"") != std::string::npos);
+    Strain c = a;  // same name, different units: conflict
+    c.id = "c-v1";
+    c.name = "c";
+    c.channels[0].units = "metres";
+    bool threw = false;
+    try {
+        generate_base_header({a, c}, "Bad");
+    } catch (const std::exception& e) {
+        threw = std::string(e.what()).find("differs") != std::string::npos;
+    }
+    CHECK(threw);
+    // A rename resolves it, and is recorded as a channel map for seeding.
+    const std::string r = generate_base_header({a, c}, "Renamed", {{"c-v1:list.length", "c.length"}});
+    CHECK(r.find("kInheritedChannels = 3") != std::string::npos);
+    CHECK(r.find("{\"c-v1:list.length\", \"c.length\"}") != std::string::npos);
 }
 
 TEST(seeding_config_round_trip) {

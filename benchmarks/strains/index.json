@@ -209,6 +209,27 @@
         "mae": 0.0
       },
       "version": 10
+    },
+    {
+      "channels": [
+        "list.length",
+        "list.item",
+        "list.weight"
+      ],
+      "created": "2026-11-04T19:47:14Z",
+      "description": "weighted sum of a list (derived from list-sum)",
+      "id": "weighted-sum-v1",
+      "name": "weighted-sum",
+      "parents": [
+        "list-sum-v6"
+      ],
+      "problem": "plugin:examples/plugins/weighted_sum.cpp",
+      "solved_test": true,
+      "test_metrics": {
+        "accuracy": 1.0,
+        "mae": 0.0
+      },
+      "version": 1
     }
   ]
 }

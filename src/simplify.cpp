@@ -82,10 +82,12 @@ SimplifyResult simplify(const Problem& problem, const MachineSpec& spec, const P
     res.length_before = program.size();
     const std::size_t C = problem.num_cases(opt.split);
 
+    std::vector<std::size_t> all_cases(C);
+    for (std::size_t c = 0; c < C; ++c) all_cases[c] = c;
     auto scores = [&](const Program& p) {
-        Runner runner(spec);
-        std::vector<double> s(C);
-        for (std::size_t c = 0; c < C; ++c) s[c] = problem.evaluate_case(runner, p, opt.split, c);
+        std::vector<double> s;
+        std::vector<long> steps;
+        problem.evaluate_batch(spec, {&p}, opt.split, all_cases, 1, s, steps);  // one round trip for plug-ins
         ++res.program_evaluations;
         return s;
     };

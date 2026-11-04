@@ -15,7 +15,7 @@ You give it only:
 
 It never gets told *how* to solve the problem. Evolution has to find that out.
 
-> Status: **stage 3 of 8** (core engine, bacteria-inspired mechanisms, strain bank). See [DESIGN.md](DESIGN.md) for the full plan:
+> Status: **stage 4 of 8** (core engine, bacteria-inspired mechanisms, strain bank, plug-ins). See [DESIGN.md](DESIGN.md) for the full plan:
 > bacterial mechanisms, the strain bank where saved programs become base classes, generated
 > C++ plug-ins, the MCP server for Claude, and more.
 
@@ -208,34 +208,90 @@ Five simplified parents raised median test accuracy from 0.09 to 0.82. See
 [benchmarks/RESULTS.md](benchmarks/RESULTS.md) §4–5.
 
 The same settings live in the config's `"seeding"` section, so a JSON config fully describes a
-seeded run. Generated C++ base classes from strains (deriving new problems from a strain's
-interface) come with the plug-in SDK in stage 4.
+seeded run. A strain can also become the C++ base class of a new problem; see
+[Deriving a problem from a strain](#deriving-a-problem-from-a-strain-dynamic-base-classes).
 
-## Adding a problem (C++)
+## Adding a problem: plug-ins
 
-A problem subclasses one generic interface; there are no domain base classes.
+A new problem is **one C++ file** written against the plug-in SDK (`include/adaptogen/sdk.hpp`).
+There's no need to touch or rebuild the engine. adaptogen compiles it on demand (cached) and
+runs it in **separate worker processes**. If a plug-in crashes or hangs on some program, only a
+worker dies: it is restarted and that program gets the worst possible score (like a cell killed
+by the drug), while the rest of the population is scored normally.
 
-```cpp
-#include "adaptogen/problem.hpp"
-
-class MyProblem : public adaptogen::Problem {
-public:
-    std::string name() const override { return "my-problem"; }
-    std::string description() const override { return "..."; }
-    std::vector<adaptogen::Channel> channels() const override {
-        return {{"price", adaptogen::ChannelKind::Sensor, 0, "today's price", "EUR"}};
-    }
-    std::size_t num_cases(adaptogen::Split s) const override { return s == adaptogen::Split::Train ? 100 : 50; }
-    double evaluate_case(adaptogen::Runner& runner, const adaptogen::Program& program,
-                         adaptogen::Split split, std::size_t index) const override {
-        // build an Environment that answers sense()/act(), run the program with runner.run(...),
-        // read the output registers and return a score (higher is better)
-    }
-};
+```bash
+./build/adaptogen plugin new my_problem               # writes my_problem.cpp from a working template
 ```
 
-Register it with `adaptogen::register_problem(...)` and it is available from the CLI. Generated
-plug-ins that don't need recompiling the engine come in stage 4.
+```bash
+./build/adaptogen plugin validate my_problem.cpp      # compile + check interface and behaviour
+```
+
+```bash
+./build/adaptogen evolve --problem plugin:my_problem.cpp
+```
+
+```cpp
+#include <adaptogen/sdk.hpp>
+using namespace adaptogen::sdk;
+
+class MyProblem : public Problem {
+public:
+    MyProblem(const Params& params, std::uint64_t seed) { /* generate cases from the seed */ }
+    std::string name() const override { return "my-problem"; }
+    std::string description() const override { return "what it is about"; }
+    std::vector<Channel> channels() const override {
+        return {sensor("price", 0, "today's price", "EUR"), action("buy", 1, "buy n units", "units")};
+    }
+    std::size_t num_cases(Split s) const override { return s == Split::Train ? 100 : 50; }
+    double evaluate_case(Runner& run, Split s, std::size_t i) const override {
+        auto env = make_env([&](int channel, const double* args, int n) { /* answer sensors */ return 0.0; },
+                            [&](int channel, const double* args, int n) { /* perform actions */ return 0.0; });
+        run(env);                   // runs the evolved program (call repeatedly for time steps)
+        return -std::fabs(run.reg(0) - 42);  // higher is better; give partial credit
+    }
+};
+ADAPTOGEN_PLUGIN(MyProblem)
+```
+
+`plugin validate` reports in plain text, or as JSON with `--json` (for Claude and scripts):
+
+- compile errors with file and line;
+- interface problems (names, arities, duplicate channels, no test cases);
+- **inheritance violations**;
+- crashes or hangs on random programs;
+- NaN scores, non-deterministic scores, and scores that never vary (nothing to select on).
+
+### Deriving a problem from a strain (dynamic base classes)
+
+A saved strain can become the **base class** of a new problem:
+
+```bash
+./build/adaptogen plugin new weighted_sum --from list-sum-v6    # writes weighted_sum_base.hpp + weighted_sum.cpp
+```
+
+The generated base class fixes the strain's channels (names, kinds, arities, descriptions and
+units). Its `channels()` is `final`, so the C++ compiler itself refuses a redefinition, and the
+parent's evolved code stays meaningful. The derived problem adds channels in `extra_channels()`,
+can drop inherited ones via `disabled_channels()` (their code becomes pseudogenes), and records
+its parents. `evolve --seed-parents` then starts from the parent strains.
+
+- **Multiple inheritance:** pass several `--from` strains (or use `plugin header A B --class X`).
+  Identical channels inherited twice are merged. The same name with a different meaning is a
+  conflict, which you resolve with `--rename STRAIN:CHANNEL=NEW`; the rename is applied when
+  seeding.
+- **Example:** [examples/plugins/weighted_sum.cpp](examples/plugins/weighted_sum.cpp) derives from
+  the `list-sum` strain and adds `list.weight`. Seeded from its parent, evolution found
+  `Σ item × weight` without a multiply instruction: it adds each item `weight` times in a nested
+  loop, i.e. it invented multiplication by repeated addition. The new strain
+  `weighted-sum-v1` records `list-sum-v6` as its parent.
+
+Built-in problems can still be written directly against `adaptogen::Problem` and registered with
+`adaptogen::register_problem(...)`.
+
+**Safety:** plug-ins are native code running with your permissions. The worker processes contain
+crashes; they are not a security sandbox. Review generated plug-ins like any other code. Building
+needs a C++20 compiler (`$ADAPTOGEN_CXX`, `$CXX`, or the one adaptogen was built with).
 
 ## Comparison with other algorithms
 
@@ -255,10 +311,11 @@ Current results and an honest discussion are in [benchmarks/RESULTS.md](benchmar
 ## Layout
 
 ```
-include/adaptogen/   public API (vm, problem, engine, variation, analysis, serialize, registry)
-src/                 engine implementation, CLI, built-in problems
+include/adaptogen/   public API (vm, problem, engine, variation, analysis, serialize, registry,
+                     strain, simplify, plugin) and the plug-in SDK (sdk.hpp, plugin_abi.h)
+src/                 engine implementation, CLI, built-in problems, plug-in worker
 bench/               comparison tool and baseline algorithms
 tests/               unit tests (self-contained runner)
-examples/            configs (quick, bacterial, stress-population, transfer-low) and data
+examples/            configs (quick, bacterial, stress-population, transfer-low), data, plug-ins
 benchmarks/          comparison results
 ```

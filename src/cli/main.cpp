@@ -1,4 +1,5 @@
 // adaptogen command-line interface.
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -10,6 +11,7 @@
 #include "adaptogen/analysis.hpp"
 #include "adaptogen/engine.hpp"
 #include "adaptogen/registry.hpp"
+#include "adaptogen/plugin.hpp"
 #include "adaptogen/serialize.hpp"
 #include "adaptogen/simplify.hpp"
 #include "adaptogen/strain.hpp"
@@ -27,6 +29,7 @@ usage:
   adaptogen evolve --problem NAME [options]   evolve a program
   adaptogen show --program FILE [--all]       show a saved program and its scores
   adaptogen strains list|show|check|reindex   browse and inspect the strain bank (see below)
+  adaptogen plugin new|header|build|validate|info   write problems as C++ plug-ins (see below)
 
 evolve options:
   --params JSON          problem parameters, e.g. '{"target":"koza1"}'
@@ -56,6 +59,17 @@ strain bank (saved programs that can be revived on new problems):
   adaptogen strains show ID [--all]                     interface, behaviour and lineage
   adaptogen strains check ID --problem NAME [--params JSON] [--param K=V] [--map OLD=NEW]
   adaptogen strains simplify ID                         save a simplified new version (verified)
+
+plug-ins (new problems in C++, run in isolated worker processes; use as --problem plugin:FILE.cpp):
+  adaptogen plugin new NAME [--from STRAIN]... [--rename STRAIN:CHANNEL=NEW]... [--dir DIR]
+                                   write NAME.cpp (and NAME_base.hpp when deriving from strains)
+  adaptogen plugin header STRAIN... --class NAME [--rename STRAIN:CHANNEL=NEW]... [-o FILE]
+                                   generate a C++ base class from strains (multiple inheritance)
+  adaptogen plugin build FILE.cpp [--json]       compile (cached); structured diagnostics
+  adaptogen plugin validate FILE [--params JSON] [--param K=V] [--json]
+                                   build, load and check interface, inheritance and behaviour
+  adaptogen plugin info FILE [--params JSON]     print the plug-in's interface
+  evolve --seed-parents            start from the plug-in's parent strains (with its channel maps)
   adaptogen strains reindex [--library DIR]
 )";
 
@@ -125,7 +139,7 @@ int cmd_evolve(const std::vector<std::string>& args) {
     cfg.seeding.library = default_library();
     json overrides = json::object();
     json seeding = json::object();
-    bool json_out = false, quiet = false, show_all = false, do_simplify = true;
+    bool json_out = false, quiet = false, show_all = false, do_simplify = true, seed_parents = false;
 
     for (std::size_t i = 0; i < args.size(); ++i) {
         const std::string& a = args[i];
@@ -152,6 +166,7 @@ int cmd_evolve(const std::vector<std::string>& args) {
         else if (a == "--save-strain") save_strain = next();
         else if (a == "--description") strain_description = next();
         else if (a == "--seed-strain") seeding["strains"].push_back(next());
+        else if (a == "--seed-parents") seed_parents = true;
         else if (a == "--seed-random") seeding["random_fraction"] = std::stod(next());
         else if (a == "--retain") seeding["retain_weight"] = std::stod(next());
         else if (a == "--library") seeding["library"] = next();
@@ -170,6 +185,13 @@ int cmd_evolve(const std::vector<std::string>& args) {
                                  "': use lowercase letters, digits, '.', '_' or '-', not ending in -v<number>");
 
     auto problem = make_problem(problem_name, params, cfg.seed);
+    if (seed_parents) {
+        auto* plugin = dynamic_cast<PluginProblem*>(problem.get());
+        if (!plugin || plugin->parents().empty())
+            throw std::runtime_error("--seed-parents needs a plug-in problem that derives from strains");
+        for (const auto& p : plugin->parents()) cfg.seeding.strains.push_back(p);
+        for (const auto& m : plugin->channel_maps()) cfg.seeding.channel_map.push_back(m);
+    }
     const MachineSpec spec = make_machine(*problem, cfg);
 
     // Seeding: report how the strains' interfaces line up with this problem before running.
@@ -274,6 +296,130 @@ int cmd_evolve(const std::vector<std::string>& args) {
     if (!strain_id.empty() && !json_out)
         std::printf("\nsaved strain %s in %s/\n", strain_id.c_str(), cfg.seeding.library.c_str());
     return 0;
+}
+
+nlohmann::json diagnostics_json(const BuildResult& b) {
+    json d = json::array();
+    for (const auto& x : b.diagnostics)
+        d.push_back({{"file", x.file}, {"line", x.line}, {"column", x.column}, {"severity", x.severity}, {"message", x.message}});
+    return d;
+}
+
+int cmd_plugin(std::vector<std::string> args) {
+    if (args.empty()) throw std::runtime_error("usage: adaptogen plugin new|header|build|validate|info ...");
+    const std::string sub = args[0];
+    args.erase(args.begin());
+    std::string library = default_library(), class_name, out_file, dir = ".";
+    std::vector<std::string> positional, from;
+    std::vector<std::pair<std::string, std::string>> renames;
+    json params = json::object();
+    bool json_out = false;
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        const std::string& a = args[i];
+        auto next = [&]() -> const std::string& {
+            if (i + 1 >= args.size()) throw std::runtime_error(a + " needs a value");
+            return args[++i];
+        };
+        if (a == "--library") library = next();
+        else if (a == "--class") class_name = next();
+        else if (a == "-o" || a == "--out") out_file = next();
+        else if (a == "--dir") dir = next();
+        else if (a == "--from") from.push_back(next());
+        else if (a == "--json") json_out = true;
+        else if (a == "--params") params.update(json::parse(next()));
+        else if (a == "--param") { auto [k, v] = key_value(next()); params[k] = v; }
+        else if (a == "--rename") {
+            const std::string kv = next();
+            const auto eq = kv.find('=');
+            if (eq == std::string::npos || kv.find(':') > eq) throw std::runtime_error("--rename expects STRAIN:CHANNEL=NEW");
+            renames.emplace_back(kv.substr(0, eq), kv.substr(eq + 1));
+        } else if (!a.empty() && a[0] != '-') positional.push_back(a);
+        else throw std::runtime_error("unknown option '" + a + "'");
+    }
+    auto camel = [](const std::string& s) {
+        std::string out;
+        bool up = true;
+        for (char c : s) {
+            if (!std::isalnum(static_cast<unsigned char>(c))) { up = true; continue; }
+            out += up ? static_cast<char>(std::toupper(static_cast<unsigned char>(c))) : c;
+            up = false;
+        }
+        return out.empty() || std::isdigit(static_cast<unsigned char>(out[0])) ? "P" + out : out;
+    };
+    auto load_strains = [&](const std::vector<std::string>& ids) {
+        StrainLibrary lib(library);
+        std::vector<Strain> out;
+        for (const auto& id : ids) out.push_back(lib.load(id));
+        return out;
+    };
+    auto write_file = [](const std::filesystem::path& p, const std::string& text) {
+        if (std::filesystem::exists(p)) throw std::runtime_error("'" + p.string() + "' already exists (not overwritten)");
+        std::ofstream out(p);
+        if (!out) throw std::runtime_error("cannot write '" + p.string() + "'");
+        out << text;
+    };
+
+    if (sub == "header") {
+        if (positional.empty()) throw std::runtime_error("plugin header needs at least one strain");
+        if (class_name.empty()) throw std::runtime_error("plugin header needs --class NAME");
+        const std::string text = generate_base_header(load_strains(positional), class_name, renames);
+        if (out_file.empty()) std::cout << text;
+        else {
+            write_file(out_file, text);
+            std::printf("wrote %s\n", out_file.c_str());
+        }
+        return 0;
+    }
+    if (sub == "new") {
+        if (positional.size() != 1) throw std::runtime_error("plugin new needs exactly one NAME");
+        const std::string name = positional[0];
+        if (class_name.empty()) class_name = camel(name);
+        std::filesystem::create_directories(dir);
+        std::string header, base;
+        if (!from.empty()) {
+            base = class_name + "Base";
+            header = name + "_base.hpp";
+            write_file(std::filesystem::path(dir) / header, generate_base_header(load_strains(from), base, renames));
+            std::printf("wrote %s/%s (base class %s from %zu strain(s))\n", dir.c_str(), header.c_str(), base.c_str(), from.size());
+        }
+        write_file(std::filesystem::path(dir) / (name + ".cpp"), plugin_template(name, class_name, header, base));
+        std::printf("wrote %s/%s.cpp\nnext: edit it, then `adaptogen plugin validate %s/%s.cpp`\n", dir.c_str(), name.c_str(),
+                    dir.c_str(), name.c_str());
+        return 0;
+    }
+    if (positional.size() != 1) throw std::runtime_error("plugin " + sub + " needs exactly one FILE");
+    const std::filesystem::path file = positional[0];
+    if (sub == "build") {
+        const BuildResult b = build_plugin(file);
+        if (json_out) {
+            std::cout << json{{"ok", b.ok}, {"library", b.library.string()}, {"cached", b.cached}, {"command", b.command},
+                              {"diagnostics", diagnostics_json(b)}, {"output", b.output}}.dump(2) << '\n';
+        } else if (b.ok) {
+            std::printf("%s %s\n", b.cached ? "up to date:" : "built", b.library.string().c_str());
+        } else {
+            std::printf("build failed:\n%s", b.output.c_str());
+        }
+        return b.ok ? 0 : 1;
+    }
+    if (sub == "validate") {
+        const ValidationReport r = validate_plugin(file, params, 1, library);
+        if (json_out) {
+            std::cout << json{{"ok", r.ok}, {"errors", r.errors}, {"warnings", r.warnings}, {"notes", r.notes},
+                              {"info", r.info}, {"diagnostics", diagnostics_json(r.build)}}.dump(2) << '\n';
+        } else {
+            for (const auto& e : r.errors) std::printf("error: %s\n", e.c_str());
+            for (const auto& w : r.warnings) std::printf("warning: %s\n", w.c_str());
+            for (const auto& n : r.notes) std::printf("note: %s\n", n.c_str());
+            std::printf("%s\n", r.ok ? "plug-in OK" : "plug-in has errors");
+        }
+        return r.ok ? 0 : 1;
+    }
+    if (sub == "info") {
+        auto p = make_plugin_problem(file.string(), params, 1);
+        std::cout << p->info().dump(2) << '\n';
+        return 0;
+    }
+    throw std::runtime_error("unknown plugin subcommand '" + sub + "'");
 }
 
 int cmd_strains(std::vector<std::string> args) {
@@ -437,6 +583,7 @@ int main(int argc, char** argv) {
         if (cmd == "evolve") return cmd_evolve(args);
         if (cmd == "show") return cmd_show(args);
         if (cmd == "strains") return cmd_strains(args);
+        if (cmd == "plugin") return cmd_plugin(args);
         std::cerr << "unknown command '" << cmd << "'\n\n" << kUsage;
         return 1;
     } catch (const std::exception& e) {

@@ -128,40 +128,61 @@ EvolutionResult Engine::run() {
     };
     resample();
 
-    auto score_on_active = [&](Individual& ind) {
-        Runner runner(spec_);
-        ind.scores.resize(S);
-        double total = 0.0;
-        for (std::size_t k = 0; k < S; ++k)
-            total += ind.scores[k] = problem_.evaluate_case(runner, ind.program, Split::Train, fit_cases[active[k]]);
-        const double mean = S ? total / static_cast<double>(S) : 0.0;
-        ind.mean_steps = S ? static_cast<double>(runner.steps()) / static_cast<double>(S) : 0.0;
-        ind.fitness = mean - cfg_.length_cost * static_cast<double>(ind.program.size()) - cfg_.time_cost * ind.mean_steps;
+    std::vector<std::size_t> active_cases;  // actual case indices scored this generation
+    auto refresh_active_cases = [&] {
+        active_cases.resize(S);
+        for (std::size_t k = 0; k < S; ++k) active_cases[k] = fit_cases[active[k]];
+    };
+    refresh_active_cases();
+    auto costs = [&](const Program& p, double mean, double mean_steps) {
+        return mean - cfg_.length_cost * static_cast<double>(p.size()) - cfg_.time_cost * mean_steps;
+    };
+
+    // Score individuals on this generation's cases in one batch (sets scores, fitness, steps).
+    std::vector<double> batch_scores;
+    std::vector<long> batch_steps;
+    auto score_batch = [&](const std::vector<Individual*>& inds) {
+        if (inds.empty()) return;
+        std::vector<const Program*> progs;
+        progs.reserve(inds.size());
+        for (const Individual* ind : inds) progs.push_back(&ind->program);
+        problem_.evaluate_batch(spec_, progs, Split::Train, active_cases, cfg_.threads, batch_scores, batch_steps);
+        evaluations += static_cast<long>(inds.size());
+        case_evaluations += static_cast<long>(inds.size() * S);
+        for (std::size_t j = 0; j < inds.size(); ++j) {
+            Individual& ind = *inds[j];
+            ind.scores.assign(batch_scores.begin() + static_cast<long>(j * S), batch_scores.begin() + static_cast<long>((j + 1) * S));
+            double total = 0;
+            for (double v : ind.scores) total += v;
+            const double n = static_cast<double>(std::max<std::size_t>(1, S));
+            ind.mean_steps = static_cast<double>(batch_steps[j]) / n;
+            ind.fitness = costs(ind.program, total / n, ind.mean_steps);
+        }
     };
 
     auto evaluate = [&](std::vector<Individual>& pop) {
-        long fresh = 0;
-        for (const auto& ind : pop) fresh += !ind.evaluated;
-        evaluations += fresh;
-        case_evaluations += fresh * static_cast<long>(S);
-        parallel_for(pop.size(), cfg_.threads, [&](std::size_t i) {
-            Individual& ind = pop[i];
-            if (ind.evaluated) return;
-            score_on_active(ind);
-            ind.stagnation = ind.fitness > ind.parent_fitness + 1e-12 ? 0 : ind.parent_stagnation + 1;
-            ind.evaluated = true;
-        });
+        std::vector<Individual*> fresh;
+        for (auto& ind : pop)
+            if (!ind.evaluated) fresh.push_back(&ind);
+        score_batch(fresh);
+        for (Individual* ind : fresh) {
+            ind->stagnation = ind->fitness > ind->parent_fitness + 1e-12 ? 0 : ind->parent_stagnation + 1;
+            ind->evaluated = true;
+        }
     };
 
-    // Fitness of a program on all selection cases (used for the champion when down-sampling).
-    auto full_fitness = [&](const Program& p) {
-        Runner runner(spec_);
+    // Mean score of one program on a set of cases, with the usual costs.
+    auto fitness_on = [&](const Program& p, const std::vector<std::size_t>& cases) {
+        if (cases.empty()) return 0.0;
+        problem_.evaluate_batch(spec_, {&p}, Split::Train, cases, cfg_.threads, batch_scores, batch_steps);
+        case_evaluations += static_cast<long>(cases.size());
         double total = 0;
-        for (std::size_t c : fit_cases) total += problem_.evaluate_case(runner, p, Split::Train, c);
-        case_evaluations += static_cast<long>(C);
-        const double n = static_cast<double>(std::max<std::size_t>(1, C));
-        return total / n - cfg_.length_cost * static_cast<double>(p.size()) - cfg_.time_cost * static_cast<double>(runner.steps()) / n;
+        for (double v : batch_scores) total += v;
+        const double n = static_cast<double>(cases.size());
+        return costs(p, total / n, static_cast<double>(batch_steps[0]) / n);
     };
+    // Fitness on all selection cases (used for the champion when down-sampling).
+    auto full_fitness = [&](const Program& p) { return fitness_on(p, fit_cases); };
 
     std::vector<Individual> pop(P);
     const std::size_t n_seeded =
@@ -303,12 +324,8 @@ EvolutionResult Engine::run() {
     bool have_best = false;
     double hof_validation = -1e300;
     auto validation_score = [&](const Program& p) {
-        Runner runner(spec_);
-        double total = 0;
-        for (std::size_t c : val_cases) total += problem_.evaluate_case(runner, p, Split::Train, c);
-        const double n = static_cast<double>(val_cases.size());
-        return total / n - cfg_.length_cost * static_cast<double>(p.size()) -
-               cfg_.time_cost * static_cast<double>(runner.steps()) / n;
+        const double v = fitness_on(p, val_cases);
+        return v;
     };
     // Lamarckian constant tuning: (1+1) search on the effective constants of the best programs,
     // judged on this generation's cases; improvements are written back into the population.
@@ -340,9 +357,7 @@ EvolutionResult Engine::run() {
                     double& v = trial.program.code[consts[rng.below(consts.size())]].imm;
                     v += rng.normal() * ct.sigma * std::max(std::fabs(v), 0.1);
                 }
-                score_on_active(trial);
-                ++evaluations;
-                case_evaluations += static_cast<long>(S);
+                score_batch({&trial});
                 if (trial.fitness > ind.fitness + 1e-12) {
                     trial.stagnation = 0;
                     ind = std::move(trial);
@@ -392,7 +407,6 @@ EvolutionResult Engine::run() {
             // The final program is chosen on held-back cases, so memorising the selection
             // cases does not win. Ties go to the better training fitness.
             const double v = validation_score(candidate.program);
-            case_evaluations += static_cast<long>(val_cases.size());
             if (!have_best || v > hof_validation + 1e-12 ||
                 (v >= hof_validation - 1e-12 && candidate.fitness > hall_of_fame.fitness + 1e-12)) {
                 hall_of_fame = std::move(candidate);
@@ -479,6 +493,7 @@ EvolutionResult Engine::run() {
             }
             if (downsampling) {
                 resample();
+                refresh_active_cases();
                 for (auto& ind : next) ind.evaluated = false;  // scores are tied to the old sample
             } else {
                 reuse_scores(pop, next);
@@ -495,6 +510,7 @@ EvolutionResult Engine::run() {
             }
             if (downsampling) {
                 resample();
+                refresh_active_cases();
                 for (auto& ind : pop) ind.evaluated = false;  // compare parent and child on the same cases
                 evaluate(pop);
             } else {
