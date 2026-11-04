@@ -32,7 +32,10 @@ json program_to_json(const MachineSpec& spec, const Program& p) {
         }
         code.push_back(std::move(j));
     }
-    return json{{"format", "adaptogen-program/1"}, {"registers", spec.num_registers}, {"code", code}};
+    return json{{"format", "adaptogen-program/1"},
+                {"registers", spec.num_registers},
+                {"mutation_rate", p.mutation_rate},
+                {"code", code}};
 }
 
 Program program_from_json(const MachineSpec& spec, const json& j) {
@@ -43,6 +46,7 @@ Program program_from_json(const MachineSpec& spec, const json& j) {
         int v = x.at(key).get<int>() % R;
         return static_cast<std::uint8_t>(v < 0 ? v + R : v);
     };
+    p.mutation_rate = j.value("mutation_rate", 1.0);
     for (const json& x : j.at("code")) {
         Instr in;
         const std::string name = x.at("op").get<std::string>();
@@ -80,6 +84,85 @@ Program program_from_json(const MachineSpec& spec, const json& j) {
 }
 
 namespace {
+
+json mechanisms_to_json(const Mechanisms& m) {
+    return json{
+        {"stress", {{"enabled", m.stress.enabled}, {"patience", m.stress.patience}, {"growth", m.stress.growth},
+                    {"max_multiplier", m.stress.max_multiplier}}},
+        {"hypermutation", {{"enabled", m.hypermutation.enabled}, {"initial_rate", m.hypermutation.initial_rate},
+                           {"min_rate", m.hypermutation.min_rate}, {"max_rate", m.hypermutation.max_rate},
+                           {"p_change", m.hypermutation.p_change}, {"change_sigma", m.hypermutation.change_sigma}}},
+        {"transfer", {{"enabled", m.transfer.enabled}, {"rate", m.transfer.rate}, {"max_segment", m.transfer.max_segment}}},
+        {"duplication", {{"enabled", m.duplication.enabled}, {"rate", m.duplication.rate},
+                         {"max_segment", m.duplication.max_segment}}},
+        {"spatial", {{"enabled", m.spatial.enabled}, {"width", m.spatial.width}, {"radius", m.spatial.radius}}},
+        {"curriculum", {{"enabled", m.curriculum.enabled}, {"bands", m.curriculum.bands}, {"refresh", m.curriculum.refresh}}},
+    };
+}
+
+template <class T>
+void set_field(const json& section, const char* name, T& field) {
+    if (section.contains(name)) field = section.at(name).get<T>();
+}
+
+void check_keys(const std::string& section, const json& j, std::initializer_list<const char*> allowed) {
+    for (const auto& [k, v] : j.items()) {
+        (void)v;
+        bool ok = false;
+        for (const char* a : allowed) ok = ok || k == a;
+        if (!ok) throw std::runtime_error("unknown key '" + k + "' in mechanisms." + section);
+    }
+}
+
+void mechanisms_from_json(Mechanisms& m, const json& j) {
+    for (const auto& [name, s] : j.items()) {
+        if (s.is_boolean()) {  // shorthand: "stress": true
+            json e = {{"enabled", s.get<bool>()}};
+            mechanisms_from_json(m, json{{name, e}});
+            continue;
+        }
+        if (name == "stress") {
+            check_keys(name, s, {"enabled", "patience", "growth", "max_multiplier"});
+            set_field(s, "enabled", m.stress.enabled);
+            set_field(s, "patience", m.stress.patience);
+            set_field(s, "growth", m.stress.growth);
+            set_field(s, "max_multiplier", m.stress.max_multiplier);
+        } else if (name == "hypermutation") {
+            check_keys(name, s, {"enabled", "initial_rate", "min_rate", "max_rate", "p_change", "change_sigma"});
+            set_field(s, "enabled", m.hypermutation.enabled);
+            set_field(s, "initial_rate", m.hypermutation.initial_rate);
+            set_field(s, "min_rate", m.hypermutation.min_rate);
+            set_field(s, "max_rate", m.hypermutation.max_rate);
+            set_field(s, "p_change", m.hypermutation.p_change);
+            set_field(s, "change_sigma", m.hypermutation.change_sigma);
+        } else if (name == "transfer") {
+            check_keys(name, s, {"enabled", "rate", "max_segment"});
+            set_field(s, "enabled", m.transfer.enabled);
+            set_field(s, "rate", m.transfer.rate);
+            set_field(s, "max_segment", m.transfer.max_segment);
+        } else if (name == "duplication") {
+            check_keys(name, s, {"enabled", "rate", "max_segment"});
+            set_field(s, "enabled", m.duplication.enabled);
+            set_field(s, "rate", m.duplication.rate);
+            set_field(s, "max_segment", m.duplication.max_segment);
+        } else if (name == "spatial") {
+            check_keys(name, s, {"enabled", "width", "radius"});
+            set_field(s, "enabled", m.spatial.enabled);
+            set_field(s, "width", m.spatial.width);
+            set_field(s, "radius", m.spatial.radius);
+        } else if (name == "curriculum") {
+            check_keys(name, s, {"enabled", "bands", "refresh"});
+            set_field(s, "enabled", m.curriculum.enabled);
+            set_field(s, "bands", m.curriculum.bands);
+            set_field(s, "refresh", m.curriculum.refresh);
+        } else {
+            throw std::runtime_error("unknown mechanism '" + name + "'");
+        }
+    }
+    if (m.curriculum.enabled && !m.spatial.enabled)
+        throw std::runtime_error("mechanisms.curriculum requires mechanisms.spatial to be enabled");
+}
+
 std::vector<Op> ops_from_json(const json& j) {
     if (j.is_string()) {
         const auto s = j.get<std::string>();
@@ -121,6 +204,7 @@ json config_to_json(const EngineConfig& c) {
         {"threads", c.threads},
         {"stop_when_solved", c.stop_when_solved},
         {"max_program_evaluations", c.max_program_evaluations},
+        {"mechanisms", mechanisms_to_json(c.mechanisms)},
         {"variation",
          {{"init_min_length", v.init_min_length},
           {"init_max_length", v.init_max_length},
@@ -162,6 +246,7 @@ void config_from_json(EngineConfig& c, const json& j) {
         else if (key == "threads") c.threads = val.get<int>();
         else if (key == "stop_when_solved") c.stop_when_solved = val.get<bool>();
         else if (key == "max_program_evaluations") c.max_program_evaluations = val.get<long>();
+        else if (key == "mechanisms") mechanisms_from_json(c.mechanisms, val);
         else if (key == "variation") {
             auto& v = c.variation;
             for (const auto& [k, x] : val.items()) {
@@ -203,7 +288,8 @@ json report_to_json(const GenerationReport& r) {
                 {"best_length", r.best_length},
                 {"best_effective_length", r.best_effective_length},
                 {"mean_length", r.mean_length},
-                {"best_train_metrics", metrics_json(r.best_train_metrics)}};
+                {"best_train_metrics", metrics_json(r.best_train_metrics)},
+                {"population_stats", metrics_json(r.population_stats)}};
 }
 
 json result_to_json(const MachineSpec& spec, const EvolutionResult& r) {

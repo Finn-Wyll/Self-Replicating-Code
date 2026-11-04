@@ -1,16 +1,19 @@
-// Compare adaptogen with established algorithms on standard formula-discovery benchmarks.
+// Compare adaptogen with established algorithms, and measure what each bacteria-inspired
+// mechanism contributes (ablation), on formula and list problems.
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <functional>
 #include <iostream>
-#include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
 
 #include "adaptogen/engine.hpp"
 #include "adaptogen/problems/formula.hpp"
+#include "adaptogen/problems/lists.hpp"
 #include "baselines.hpp"
 
 using namespace adaptogen;
@@ -18,11 +21,17 @@ using namespace adaptogen::bench;
 
 namespace {
 
+struct Benchmark {
+    std::string name, description, primary;  // primary = name of the main test metric
+    std::function<std::unique_ptr<Problem>(std::uint64_t seed)> make;
+    bool formula = false;
+};
+
 struct Algorithm {
-    std::string name;
-    std::string description;
-    std::function<AlgoResult(const FormulaProblem&, const EngineConfig&)> run;
-    std::function<void(EngineConfig&)> configure;
+    std::string name, description;
+    std::function<AlgoResult(const Problem&, const EngineConfig&)> run;
+    std::function<void(EngineConfig&)> configure = [](EngineConfig&) {};
+    bool formula_only = false;
 };
 
 double median(std::vector<double> v) {
@@ -37,12 +46,96 @@ double quantile(std::vector<double> v, double q) {
     return v[static_cast<std::size_t>(q * static_cast<double>(v.size() - 1) + 0.5)];
 }
 
+// Two-sided Fisher exact test for a 2x2 table (successes a of n1 vs b of n2).
+double fisher_exact(int a, int n1, int b, int n2) {
+    const int k = a + b, n = n1 + n2;
+    auto lf = [](int x) { return std::lgamma(static_cast<double>(x) + 1.0); };
+    auto logp = [&](int x) { return lf(k) + lf(n - k) + lf(n1) + lf(n2) - lf(x) - lf(k - x) - lf(n1 - x) - lf(n2 - k + x) - lf(n); };
+    const double observed = logp(a);
+    double p = 0;
+    for (int x = std::max(0, k - n2); x <= std::min(k, n1); ++x) {
+        const double lp = logp(x);
+        if (lp <= observed + 1e-9) p += std::exp(lp);
+    }
+    return std::min(1.0, p);
+}
+
+AlgoResult tree_gp(const Problem& p, const EngineConfig& c) { return run_tree_gp(dynamic_cast<const FormulaProblem&>(p), c); }
+AlgoResult polyfit(const Problem& p, const EngineConfig& c) { return run_polyfit(dynamic_cast<const FormulaProblem&>(p), c); }
+
+std::vector<Algorithm> baseline_suite() {
+    return {
+        {"adaptogen", "linear programs, full core instruction set (incl. if/loop), lexicase", run_adaptogen},
+        {"adaptogen-classic", "as above, restricted to the tree-GP function set", run_adaptogen,
+         [](EngineConfig& c) { c.ops = classic_regression_ops(); }, true},
+        {"adaptogen-tournament", "full instruction set, tournament selection (size 4)", run_adaptogen,
+         [](EngineConfig& c) { c.selection = SelectionMethod::Tournament; }},
+        {"tree-gp", "Koza-style tree GP, {+,-,*,/,sin,cos,exp,log}, tournament 7", tree_gp, [](EngineConfig&) {}, true},
+        {"hill-climber", "(1+1) mutation-only search on linear programs, restarts", run_hill_climber},
+        {"random-search", "random linear programs, keep the best", run_random_search},
+        {"polyfit", "polynomial least squares, degree by hold-out (not evolutionary)", polyfit, [](EngineConfig&) {}, true},
+    };
+}
+
+std::vector<Algorithm> mechanism_suite() {
+    auto with = [](std::function<void(Mechanisms&)> f) {
+        return [f](EngineConfig& c) { f(c.mechanisms); };
+    };
+    auto all = [](Mechanisms& m) {
+        m.stress.enabled = m.hypermutation.enabled = m.transfer.enabled = m.duplication.enabled = true;
+        m.spatial.enabled = m.curriculum.enabled = true;
+    };
+    return {
+        {"baseline", "stage-1 engine: no mechanisms (crossover + mutation, lexicase)", run_adaptogen},
+        {"+stress", "stress-induced mutagenesis in stagnating lineages", run_adaptogen,
+         with([](Mechanisms& m) { m.stress.enabled = true; })},
+        {"+hypermutation", "heritable, evolving mutation rates", run_adaptogen,
+         with([](Mechanisms& m) { m.hypermutation.enabled = true; })},
+        {"+transfer", "horizontal transfer of code segments", run_adaptogen,
+         with([](Mechanisms& m) { m.transfer.enabled = true; })},
+        {"+duplication", "gene duplication", run_adaptogen, with([](Mechanisms& m) { m.duplication.enabled = true; })},
+        {"+spatial", "population on a torus with local competition", run_adaptogen,
+         with([](Mechanisms& m) { m.spatial.enabled = true; })},
+        {"+spatial+curriculum", "spatial + MEGA-plate difficulty bands", run_adaptogen,
+         with([](Mechanisms& m) { m.spatial.enabled = m.curriculum.enabled = true; })},
+        {"all", "all six mechanisms, crossover kept", run_adaptogen, with(all)},
+        {"bacterial", "all six mechanisms, no crossover (asexual + horizontal transfer, like real bacteria)",
+         run_adaptogen,
+         [all](EngineConfig& c) {
+             all(c.mechanisms);
+             c.variation.p_crossover = 0.0;
+         }},
+        {"tree-gp", "reference: Koza-style tree GP", tree_gp, [](EngineConfig&) {}, true},
+    };
+}
+
+std::vector<Benchmark> all_benchmarks() {
+    std::vector<Benchmark> b;
+    for (const auto& t : formula_targets()) {
+        const std::string name = t.name;
+        b.push_back({name, t.formula, "R^2",
+                     [name](std::uint64_t seed) -> std::unique_ptr<Problem> {
+                         return FormulaProblem::from_params({{"target", name}}, seed);
+                     },
+                     true});
+    }
+    for (const char* task : {"sum", "max", "count_positive"}) {
+        const std::string t = task;
+        b.push_back({"list-" + t, t + " of a list (train length <= 10, test length <= 40)", "accuracy",
+                     [t](std::uint64_t seed) -> std::unique_ptr<Problem> {
+                         return ListProblem::from_params({{"task", t}}, seed);
+                     },
+                     false});
+    }
+    return b;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     int runs = 20, population = 500, generations = 100, threads = 0;
     std::vector<std::string> targets, only;
-    std::string out_prefix = "benchmarks/results";
+    std::string suite = "baselines", out_prefix;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         auto next = [&]() -> std::string {
@@ -55,62 +148,57 @@ int main(int argc, char** argv) {
         else if (a == "--threads") threads = std::stoi(next());
         else if (a == "--target") targets.push_back(next());
         else if (a == "--algorithm") only.push_back(next());
+        else if (a == "--suite") suite = next();
         else if (a == "--out") out_prefix = next();
         else {
             std::fprintf(stderr,
-                         "usage: adaptogen-compare [--runs N] [--population N] [--generations N] [--threads N]\n"
-                         "                         [--target NAME]... [--algorithm NAME]... [--out PREFIX]\n");
+                         "usage: adaptogen-compare [--suite baselines|mechanisms] [--runs N] [--population N]\n"
+                         "         [--generations N] [--threads N] [--target NAME]... [--algorithm NAME]... [--out PREFIX]\n"
+                         "targets: koza1 nguyen5 nguyen7 nguyen10 pagie1 keijzer6 list-sum list-max list-count_positive\n");
             return 1;
         }
     }
-    if (targets.empty())
-        for (const auto& t : formula_targets()) targets.push_back(t.name);
-
-    std::vector<Algorithm> algos = {
-        {"adaptogen", "linear programs, full core instruction set (incl. if/loop), lexicase", run_adaptogen,
-         [](EngineConfig&) {}},
-        {"adaptogen-classic", "as above, restricted to the tree-GP function set", run_adaptogen,
-         [](EngineConfig& c) { c.ops = classic_regression_ops(); }},
-        {"adaptogen-tournament", "full instruction set, tournament selection (size 4)", run_adaptogen,
-         [](EngineConfig& c) { c.selection = SelectionMethod::Tournament; }},
-        {"tree-gp", "Koza-style tree GP, {+,-,*,/,sin,cos,exp,log}, tournament 7", run_tree_gp, [](EngineConfig&) {}},
-        {"hill-climber", "(1+1) mutation-only search on linear programs, restarts", run_hill_climber,
-         [](EngineConfig&) {}},
-        {"random-search", "random linear programs, keep the best", run_random_search, [](EngineConfig&) {}},
-        {"polyfit", "polynomial least squares, degree by hold-out (not evolutionary)", run_polyfit,
-         [](EngineConfig&) {}},
-    };
+    std::vector<Algorithm> algos;
+    if (suite == "baselines") algos = baseline_suite();
+    else if (suite == "mechanisms") algos = mechanism_suite();
+    else {
+        std::fprintf(stderr, "unknown suite '%s'\n", suite.c_str());
+        return 1;
+    }
+    if (out_prefix.empty()) out_prefix = "benchmarks/" + suite;
     if (!only.empty())
         std::erase_if(algos, [&](const Algorithm& a) { return std::find(only.begin(), only.end(), a.name) == only.end(); });
 
+    std::vector<Benchmark> benches = all_benchmarks();
+    if (!targets.empty())
+        std::erase_if(benches, [&](const Benchmark& b) { return std::find(targets.begin(), targets.end(), b.name) == targets.end(); });
+    else if (suite == "baselines")
+        std::erase_if(benches, [](const Benchmark& b) { return !b.formula; });
+
     std::ofstream raw(out_prefix + ".csv");
-    raw << "target,algorithm,run,seed,solved_test,test_r2,test_nrmse,train_nrmse,program_evaluations,seconds,size\n";
+    raw << "benchmark,algorithm,run,seed,solved_test,test_primary,program_evaluations,seconds,size\n";
     std::ofstream md(out_prefix + ".md");
-    md << "# Benchmark results\n\n"
+    md << "# Results: " << suite << "\n\n"
        << "Budget per run: population " << population << " x " << generations << " generations = "
-       << static_cast<long>(population) * generations << " program evaluations (random search and hill climbing "
-       << "get the same number of evaluations). " << runs << " independent runs per cell; each run samples its "
-       << "own training data. \"Solved\" = RMSE on the **unseen test set** below 1% of the target's standard "
-       << "deviation (R^2 > 0.9999). Runs stop early when the training set is solved.\n\n### Algorithms\n\n";
+       << static_cast<long>(population) * generations << " program evaluations. " << runs
+       << " independent runs per cell; each run samples its own data. \"Solved\" is judged on the **unseen test "
+       << "set** (formulas: RMSE < 1% of the target's spread; lists: every test list answered exactly). "
+       << "Runs stop early when the training set is solved. p = two-sided Fisher exact test of the solved "
+       << "count against the first algorithm in the table.\n\n### Algorithms\n\n";
     for (const auto& a : algos) md << "- **" << a.name << "**: " << a.description << "\n";
     md << "\n";
 
     std::mutex mu;
-    for (const auto& target : targets) {
-        const FormulaTarget* t = nullptr;
-        for (const auto& c : formula_targets())
-            if (c.name == target) t = &c;
-        if (!t) {
-            std::fprintf(stderr, "unknown target %s\n", target.c_str());
-            return 1;
-        }
-        std::printf("\n== %s: %s\n", t->name.c_str(), t->formula.c_str());
-        std::printf("%-22s %8s %10s %16s %12s %9s %8s\n", "algorithm", "solved", "median R2", "R2 (25%..75%)",
-                    "evals", "time", "size");
-        md << "## " << t->name << ": `" << t->formula << "`\n\n"
-           << "| algorithm | solved (test) | median test R^2 | R^2 25%..75% | median evaluations | median time (s) | median size |\n"
-           << "|---|---|---|---|---|---|---|\n";
+    for (const auto& bench : benches) {
+        std::printf("\n== %s: %s\n", bench.name.c_str(), bench.description.c_str());
+        std::printf("%-22s %8s %7s %12s %18s %10s %8s %6s\n", "algorithm", "solved", "p", ("median " + bench.primary).c_str(),
+                    "25%..75%", "evals", "time", "size");
+        md << "## " << bench.name << ": " << bench.description << "\n\n"
+           << "| algorithm | solved (test) | p vs first | median test " << bench.primary << " | 25%..75% | median evaluations | median time (s) | median size |\n"
+           << "|---|---|---|---|---|---|---|---|\n";
+        int first_solved = -1;
         for (const auto& algo : algos) {
+            if (algo.formula_only && !bench.formula) continue;
             std::vector<AlgoResult> results(static_cast<std::size_t>(runs));
             parallel_for(static_cast<std::size_t>(runs), threads, [&](std::size_t r) {
                 EngineConfig cfg;
@@ -119,34 +207,38 @@ int main(int argc, char** argv) {
                 cfg.generations = generations;
                 cfg.threads = 1;  // parallelism is across runs
                 algo.configure(cfg);
-                auto problem = FormulaProblem::from_params({{"target", target}}, cfg.seed);
+                auto problem = bench.make(cfg.seed);
                 results[r] = algo.run(*problem, cfg);
                 std::lock_guard<std::mutex> lock(mu);
-                raw << target << ',' << algo.name << ',' << r << ',' << cfg.seed << ',' << results[r].solved_test
-                    << ',' << results[r].test_r2 << ',' << results[r].test_nrmse << ',' << results[r].train_nrmse
-                    << ',' << results[r].program_evaluations << ',' << results[r].seconds << ',' << results[r].size
-                    << '\n';
+                raw << bench.name << ',' << algo.name << ',' << r << ',' << cfg.seed << ',' << results[r].solved_test << ','
+                    << results[r].test_primary << ',' << results[r].program_evaluations << ',' << results[r].seconds << ','
+                    << results[r].size << '\n';
             });
-            std::vector<double> r2, ev, sec, size;
+            std::vector<double> prim, ev, sec, size;
             int solved = 0;
             for (const auto& r : results) {
                 solved += r.solved_test;
-                r2.push_back(r.test_r2);
+                prim.push_back(r.test_primary);
                 ev.push_back(static_cast<double>(r.program_evaluations));
                 sec.push_back(r.seconds);
                 size.push_back(r.size);
             }
-            char line[256];
-            std::snprintf(line, sizeof line, "%-22s %5d/%-2d %10.5f %7.4f..%-7.4f %12.0f %8.2fs %8.0f", algo.name.c_str(),
-                          solved, runs, median(r2), quantile(r2, 0.25), quantile(r2, 0.75), median(ev), median(sec),
-                          median(size));
+            std::string p = "-";
+            if (first_solved < 0) first_solved = solved;
+            else {
+                char buf[16];
+                std::snprintf(buf, sizeof buf, "%.3f", fisher_exact(solved, runs, first_solved, runs));
+                p = buf;
+            }
+            const double lo = quantile(prim, 0.25), hi = quantile(prim, 0.75), med = median(prim);
+            char line[320];
+            std::snprintf(line, sizeof line, "%-22s %5d/%-2d %7s %12.5g %8.4g..%-8.4g %10.0f %7.2fs %6.0f", algo.name.c_str(),
+                          solved, runs, p.c_str(), med, lo, hi, median(ev), median(sec), median(size));
             std::puts(line);
             std::fflush(stdout);
-            char row[320];
-            std::snprintf(row, sizeof row, "| %s | %d/%d | %.5f | %.4f .. %.4f | %.0f | %.2f | %.0f |\n",
-                          algo.name.c_str(), solved, runs, median(r2), quantile(r2, 0.25), quantile(r2, 0.75),
-                          median(ev), median(sec), median(size));
-            md << row;
+            std::snprintf(line, sizeof line, "| %s | %d/%d | %s | %.5g | %.4g .. %.4g | %.0f | %.2f | %.0f |\n",
+                          algo.name.c_str(), solved, runs, p.c_str(), med, lo, hi, median(ev), median(sec), median(size));
+            md << line;
         }
         md << "\n";
     }

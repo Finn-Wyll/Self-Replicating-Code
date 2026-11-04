@@ -9,6 +9,7 @@
 #include "adaptogen/analysis.hpp"
 #include "adaptogen/engine.hpp"
 #include "adaptogen/problems/formula.hpp"
+#include "adaptogen/problems/lists.hpp"
 #include "adaptogen/registry.hpp"
 #include "adaptogen/serialize.hpp"
 
@@ -238,6 +239,117 @@ TEST(registry_builds_formula_problem) {
     auto p = make_problem("formula", {{"target", "nguyen10"}}, 1);
     CHECK(p->channels().size() == 2);
     CHECK(p->num_cases(Split::Train) == 100);
+}
+
+TEST(poisson_has_the_right_mean) {
+    Rng r(9);
+    double total = 0;
+    for (int i = 0; i < 20000; ++i) total += r.poisson(2.5);
+    CHECK_NEAR(total / 20000, 2.5, 0.05);
+    CHECK(r.poisson(0) == 0);
+}
+
+TEST(gene_duplication_makes_a_tandem_copy) {
+    auto s = spec_with({});
+    VariationConfig v;
+    Rng rng(4);
+    for (int t = 0; t < 200; ++t) {
+        Program p = random_program(s, v, rng);
+        const Program before = p;
+        if (!duplicate_segment(p, v, 6, rng)) continue;
+        const std::size_t len = p.size() - before.size();
+        CHECK(len >= 1 && len <= 6);
+        // find the duplicated block: p = before[0:s+len] + before[s:s+len] + before[s+len:]
+        bool found = false;
+        for (std::size_t st = 0; st + len <= before.size() && !found; ++st) {
+            Program expect;
+            expect.code.assign(before.code.begin(), before.code.begin() + static_cast<long>(st + len));
+            expect.code.insert(expect.code.end(), before.code.begin() + static_cast<long>(st), before.code.begin() + static_cast<long>(st + len));
+            expect.code.insert(expect.code.end(), before.code.begin() + static_cast<long>(st + len), before.code.end());
+            found = expect.code == p.code;
+        }
+        CHECK(found);
+    }
+    v.max_length = 5;
+    Program small{{I(Op::Add), I(Op::Add), I(Op::Add), I(Op::Add), I(Op::Add)}};
+    CHECK(!duplicate_segment(small, v, 6, rng));
+}
+
+TEST(horizontal_transfer_inserts_donor_code) {
+    auto s = spec_with({});
+    Program donor{{I(Op::Const, 1, 0, 0, 0, 42.0), I(Op::Mul, 2, 1, 1), I(Op::Sin, 3, 2)}};
+    Program recipient{{I(Op::Add), I(Op::Sub)}};
+    VariationConfig v;
+    Rng rng(8);
+    CHECK(transfer_segment(recipient, donor, v, 6, rng));
+    CHECK(recipient.size() > 2 && recipient.size() <= 5);
+    int from_donor = 0;
+    for (const auto& in : recipient.code) from_donor += in.op == Op::Const || in.op == Op::Mul || in.op == Op::Sin;
+    CHECK(from_donor == static_cast<int>(recipient.size()) - 2);
+}
+
+TEST(mechanisms_config_round_trip_and_validation) {
+    EngineConfig a;
+    a.mechanisms.stress.enabled = true;
+    a.mechanisms.stress.patience = 7;
+    a.mechanisms.transfer.rate = 0.33;
+    a.mechanisms.spatial.enabled = a.mechanisms.curriculum.enabled = true;
+    a.mechanisms.curriculum.bands = 5;
+    EngineConfig b;
+    config_from_json(b, config_to_json(a));
+    CHECK(b.mechanisms.stress.enabled && b.mechanisms.stress.patience == 7);
+    CHECK(b.mechanisms.transfer.rate == 0.33 && b.mechanisms.curriculum.bands == 5);
+    EngineConfig c;
+    config_from_json(c, nlohmann::json::parse(R"({"mechanisms": {"duplication": true}})"));
+    CHECK(c.mechanisms.duplication.enabled);
+    bool threw = false;
+    try {
+        EngineConfig d;
+        config_from_json(d, nlohmann::json::parse(R"({"mechanisms": {"curriculum": true}})"));
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    CHECK(threw);  // curriculum needs spatial
+}
+
+TEST(all_mechanisms_are_reproducible_and_bounded) {
+    auto problem = FormulaProblem::from_params({{"target", "nguyen7"}}, 3);
+    EngineConfig cfg;
+    cfg.seed = 3;
+    cfg.population = 60;
+    cfg.generations = 15;
+    auto& m = cfg.mechanisms;
+    m.stress.enabled = m.hypermutation.enabled = m.transfer.enabled = m.duplication.enabled = true;
+    m.spatial.enabled = m.curriculum.enabled = true;
+    cfg.threads = 1;
+    std::vector<GenerationReport> reps;
+    Engine e1(*problem, cfg);
+    e1.on_generation([&](const GenerationReport& r) { reps.push_back(r); });
+    auto r1 = e1.run();
+    cfg.threads = 4;
+    auto r2 = Engine(*problem, cfg).run();
+    CHECK(r1.best == r2.best);
+    CHECK(r1.best.mutation_rate >= m.hypermutation.min_rate && r1.best.mutation_rate <= m.hypermutation.max_rate);
+    for (std::size_t i = 1; i < reps.size(); ++i) CHECK(reps[i].best_fitness >= reps[i - 1].best_fitness);  // hall of fame
+    double transfers = 0, dups = 0;
+    for (const auto& r : reps)
+        for (const auto& st : r.population_stats) {
+            if (st.name == "transfers") transfers += st.value;
+            if (st.name == "duplications") dups += st.value;
+        }
+    CHECK(transfers > 0 && dups > 0);
+    CHECK(reps.back().program_evaluations == 64L * 15);  // 60 rounds up to an 8x8 grid
+}
+
+TEST(list_problem_accepts_a_hand_written_sum) {
+    auto p = ListProblem::from_params({{"task", "sum"}}, 1);
+    MachineSpec s = make_machine(*p, EngineConfig{});
+    // r1 = list.length; repeat |r1| times (r2 = i): { r3 = list.item[r2]; r0 = r0 + r3 }
+    Program prog{{I(Op::Sense, 1, 0, 0, 0, 0, 0), I(Op::Loop, 2, 1, 0, 2), I(Op::Sense, 3, 2, 0, 0, 0, 1),
+                  I(Op::Add, 0, 0, 3)}};
+    CHECK(p->solved(s, prog, Split::Train));
+    CHECK(p->solved(s, prog, Split::Test));
+    CHECK(effective_length(s, prog, 1) == 4);
 }
 
 int main() {

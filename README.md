@@ -15,7 +15,7 @@ You give it only:
 
 It never gets told *how* to solve the problem. Evolution has to find that out.
 
-> Status: **stage 1 of 8** (core engine). See [DESIGN.md](DESIGN.md) for the full plan:
+> Status: **stage 2 of 8** (core engine + bacteria-inspired mechanisms). See [DESIGN.md](DESIGN.md) for the full plan:
 > bacterial mechanisms, the strain bank where saved programs become base classes, generated
 > C++ plug-ins, the MCP server for Claude, and more.
 
@@ -70,6 +70,13 @@ Other commands:
 ./build/adaptogen evolve --problem formula --param target=koza1 --json   # one JSON event per line
 ```
 
+List algorithms (the program must discover iteration; it is tested on lists 4x longer than
+it trained on):
+
+```bash
+./build/adaptogen evolve --problem list --param task=sum
+```
+
 Your own data: any CSV with a header row works (`--param data=file.csv`). The last column is the
 target unless you pass `--param target_column=NAME`.
 
@@ -91,6 +98,29 @@ change what it does.
 
 **Selection.** `lexicase` (default) picks parents that excel on randomly ordered individual cases,
 which keeps specialists alive as stepping stones. `tournament` compares overall average scores.
+
+## Bacteria-inspired mechanisms
+
+Each mechanism can be switched on independently in the config's `"mechanisms"` section
+(`"stress": true` is shorthand for `{"enabled": true}`). [examples/bacterial.json](examples/bacterial.json)
+turns them all on and disables crossover, giving asexual reproduction plus horizontal transfer
+like real bacteria.
+
+```bash
+./build/adaptogen evolve --problem formula --param target=nguyen7 --config examples/bacterial.json --csv run.csv
+```
+
+| Mechanism | Biology | What the engine does |
+|---|---|---|
+| `stress` | SOS response | A lineage that has not improved for `patience` generations gets up to `max_multiplier`× more mutations |
+| `hypermutation` | Mutator strains | Every program carries a heritable mutation rate that itself mutates (log-normal steps) |
+| `transfer` | Plasmids / conjugation | Offspring receive a short code segment (1..`max_segment`) from a random neighbour |
+| `duplication` | Gene duplication | A code segment is copied in place; the copies can then diverge |
+| `spatial` | Colonies on a plate | Population on a torus; offspring compete with the cell they would replace |
+| `curriculum` | MEGA-plate gradient | Grid columns form bands judged on progressively harder subsets of the cases (needs `spatial`) |
+
+Per-generation statistics (mean mutation rate, mean stress multiplier, number of transfers and
+duplications) appear in `--json` output under `population_stats`.
 
 ## Adding a problem (C++)
 
@@ -120,12 +150,15 @@ plug-ins that don't need recompiling the engine come in stage 4.
 
 ## Comparison with other algorithms
 
-`adaptogen-compare` runs adaptogen against established methods with **the same evaluation
-budget** on standard symbolic-regression benchmarks (Koza, Nguyen, Keijzer, Pagie). It scores
+`adaptogen-compare` runs fair comparisons with **the same evaluation budget** and scores
 on unseen test data:
 
 ```bash
-./build/adaptogen-compare --runs 20      # writes benchmarks/results.md and .csv
+./build/adaptogen-compare --suite baselines --runs 20    # vs tree GP, hill climbing, random search, polyfit
+```
+
+```bash
+./build/adaptogen-compare --suite mechanisms --runs 20   # ablation: what each bacterial mechanism adds
 ```
 
 Current results and an honest discussion are in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
@@ -137,6 +170,6 @@ include/adaptogen/   public API (vm, problem, engine, variation, analysis, seria
 src/                 engine implementation, CLI, built-in problems
 bench/               comparison tool and baseline algorithms
 tests/               unit tests (self-contained runner)
-examples/            configs and data
+examples/            configs (quick.json, bacterial.json) and data
 benchmarks/          comparison results
 ```

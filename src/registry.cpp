@@ -4,6 +4,7 @@
 #include <stdexcept>
 
 #include "adaptogen/problems/formula.hpp"
+#include "adaptogen/problems/lists.hpp"
 
 namespace adaptogen {
 
@@ -34,6 +35,13 @@ void register_builtin_problems() {
                           "\"test_fraction\": 0.25, \"noise\": 0.0}\n    benchmarks:" + targets,
                           [](const nlohmann::json& p, std::uint64_t seed) -> std::unique_ptr<Problem> {
                               return FormulaProblem::from_params(p, seed);
+                          }});
+        register_problem({"list",
+                          "List algorithms: compute a property of a list (programs must discover iteration).",
+                          "{\"task\": \"sum\"|\"max\"|\"count_positive\", \"train_cases\": 60, \"train_max_length\": 10, "
+                          "\"test_cases\": 200, \"test_max_length\": 40, \"value_range\": 9}",
+                          [](const nlohmann::json& p, std::uint64_t seed) -> std::unique_ptr<Problem> {
+                              return ListProblem::from_params(p, seed);
                           }});
     });
 }

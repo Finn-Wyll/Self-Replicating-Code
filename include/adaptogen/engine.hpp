@@ -10,6 +10,54 @@ namespace adaptogen {
 
 enum class SelectionMethod { Tournament, Lexicase };
 
+/// The bacteria-inspired mechanisms. Each is off by default so its effect can be measured.
+struct Mechanisms {
+    /// SOS response: a lineage that has not improved for `patience` generations produces
+    /// offspring with extra mutations: multiplier = 1 + growth * (stagnation - patience), capped.
+    struct Stress {
+        bool enabled = false;
+        int patience = 3;
+        double growth = 0.5;
+        double max_multiplier = 6.0;
+    } stress;
+    /// Hypermutators: every program carries a heritable mutation rate (expected mutations per
+    /// offspring) which itself mutates, so evolution tunes its own exploration.
+    struct Hypermutation {
+        bool enabled = false;
+        double initial_rate = 1.0;
+        double min_rate = 0.2, max_rate = 8.0;
+        double p_change = 0.1;     // chance per offspring that the rate itself mutates
+        double change_sigma = 0.5; // log-normal step size
+    } hypermutation;
+    /// Horizontal gene transfer: copy a short segment from a random (neighbouring) donor.
+    struct Transfer {
+        bool enabled = false;
+        double rate = 0.2;  // chance per offspring
+        int max_segment = 6;
+    } transfer;
+    /// Gene duplication: copy a segment in place; the copies can then diverge.
+    struct Duplication {
+        bool enabled = false;
+        double rate = 0.1;
+        int max_segment = 6;
+    } duplication;
+    /// Spatial structure: population on a torus; offspring compete locally (replace the cell
+    /// only if at least as good), which preserves diversity like colonies on a plate.
+    struct Spatial {
+        bool enabled = false;
+        int width = 0;   // 0 = square grid sized to the population
+        int radius = 1;  // neighbourhood radius (1 = 3x3)
+    } spatial;
+    /// MEGA-plate curriculum (requires spatial): the grid's columns form bands; band k is
+    /// judged on the easiest (k+1)/bands fraction of the training cases, the last on all.
+    /// Case difficulty is measured from how well the population does on each case.
+    struct Curriculum {
+        bool enabled = false;
+        int bands = 4;
+        int refresh = 5;  // re-rank case difficulty every N generations
+    } curriculum;
+};
+
 struct EngineConfig {
     std::uint64_t seed = 1;
     int population = 500;
@@ -21,6 +69,7 @@ struct EngineConfig {
     std::vector<Op> ops;  // empty = problem's default_ops()
     VmLimits limits;
     VariationConfig variation;
+    Mechanisms mechanisms;
     double const_min = -5.0, const_max = 5.0;
     double length_cost = 0.0;  // fitness penalty per instruction ("cost of resistance")
     double time_cost = 0.0;    // fitness penalty per executed instruction per case
@@ -40,6 +89,8 @@ struct GenerationReport {
     double best_effective_length = 0.0;
     double mean_length = 0.0;
     std::vector<Metric> best_train_metrics;
+    /// Population-level statistics of the mechanisms (mutation rates, stress, transfers...).
+    std::vector<Metric> population_stats;
 };
 
 struct EvolutionResult {

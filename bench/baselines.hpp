@@ -9,7 +9,7 @@
 namespace adaptogen::bench {
 
 struct AlgoResult {
-    double train_nrmse = 0, test_nrmse = 0, test_r2 = 0;
+    double test_primary = 0;  // first test metric of the problem (R^2 for formulas, accuracy for lists)
     bool solved_test = false;
     long program_evaluations = 0;
     double seconds = 0;
@@ -17,14 +17,15 @@ struct AlgoResult {
 };
 
 /// adaptogen's engine (linear programs on the VM).
-AlgoResult run_adaptogen(const FormulaProblem& problem, const EngineConfig& cfg);
+AlgoResult run_adaptogen(const Problem& problem, const EngineConfig& cfg);
 /// Random programs, keep the best. Same budget as population * generations.
-AlgoResult run_random_search(const FormulaProblem& problem, const EngineConfig& cfg);
+AlgoResult run_random_search(const Problem& problem, const EngineConfig& cfg);
 /// (1+1) hill climbing on linear programs with restarts.
-AlgoResult run_hill_climber(const FormulaProblem& problem, const EngineConfig& cfg);
+AlgoResult run_hill_climber(const Problem& problem, const EngineConfig& cfg);
 /// Classic Koza-style tree GP: ramped half-and-half, subtree crossover/mutation, tournament 7.
+/// Formula problems only.
 AlgoResult run_tree_gp(const FormulaProblem& problem, const EngineConfig& cfg);
-/// Polynomial least squares; degree chosen on a hold-out split (not evolutionary).
+/// Polynomial least squares; degree chosen on a hold-out split (not evolutionary). Formula problems only.
 AlgoResult run_polyfit(const FormulaProblem& problem, const EngineConfig& cfg);
 
 }  // namespace adaptogen::bench

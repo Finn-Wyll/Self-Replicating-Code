@@ -50,6 +50,8 @@ void canonicalize(Instr& in);
 
 struct Program {
     std::vector<Instr> code;
+    /// Heritable mutation rate (expected mutations per offspring) used when hypermutation is on.
+    double mutation_rate = 1.0;
     bool operator==(const Program&) const = default;
     std::size_t size() const { return code.size(); }
 };

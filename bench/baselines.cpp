@@ -15,21 +15,12 @@ namespace {
 using clock_type = std::chrono::steady_clock;
 double since(clock_type::time_point t0) { return std::chrono::duration<double>(clock_type::now() - t0).count(); }
 
-double metric(const std::vector<Metric>& ms, const std::string& name) {
-    for (const auto& m : ms)
-        if (m.name == name) return m.value;
-    return 0;
-}
-
-AlgoResult finish_program(const FormulaProblem& problem, const MachineSpec& spec, const Program& p, long evals,
+AlgoResult finish_program(const Problem& problem, const MachineSpec& spec, const Program& p, long evals,
                           clock_type::time_point t0) {
     AlgoResult r;
-    const auto tr = problem.metrics(spec, p, Split::Train);
     const auto te = problem.metrics(spec, p, Split::Test);
-    r.train_nrmse = metric(tr, "nrmse");
-    r.test_nrmse = metric(te, "nrmse");
-    r.test_r2 = metric(te, "r2");
-    r.solved_test = r.test_nrmse < FormulaProblem::kSolvedNrmse;
+    r.test_primary = te.empty() ? 0 : te[0].value;
+    r.solved_test = problem.solved(spec, p, Split::Test);
     r.program_evaluations = evals;
     r.seconds = since(t0);
     r.size = static_cast<double>(effective_length(spec, p, problem.num_outputs()));
@@ -39,18 +30,12 @@ AlgoResult finish_program(const FormulaProblem& problem, const MachineSpec& spec
 AlgoResult finish_predictions(const FormulaProblem& problem, const std::function<double(const std::vector<double>&)>& f,
                               long evals, double size, clock_type::time_point t0) {
     AlgoResult r;
-    for (Split s : {Split::Train, Split::Test}) {
-        const Dataset& d = problem.data(s);
-        std::vector<double> pred(d.size());
-        for (std::size_t i = 0; i < d.size(); ++i) pred[i] = f(d.x[i]);
-        const auto m = regression_metrics(d.y, pred);
-        if (s == Split::Train) r.train_nrmse = m.nrmse;
-        else {
-            r.test_nrmse = m.nrmse;
-            r.test_r2 = m.r2;
-        }
-    }
-    r.solved_test = r.test_nrmse < FormulaProblem::kSolvedNrmse;
+    const Dataset& d = problem.data(Split::Test);
+    std::vector<double> pred(d.size());
+    for (std::size_t i = 0; i < d.size(); ++i) pred[i] = f(d.x[i]);
+    const auto m = regression_metrics(d.y, pred);
+    r.test_primary = m.r2;
+    r.solved_test = m.nrmse < FormulaProblem::kSolvedNrmse;
     r.program_evaluations = evals;
     r.size = size;
     r.seconds = since(t0);
@@ -59,14 +44,14 @@ AlgoResult finish_predictions(const FormulaProblem& problem, const std::function
 
 }  // namespace
 
-AlgoResult run_adaptogen(const FormulaProblem& problem, const EngineConfig& cfg) {
+AlgoResult run_adaptogen(const Problem& problem, const EngineConfig& cfg) {
     const auto t0 = clock_type::now();
     Engine engine(problem, cfg);
     const auto res = engine.run();
     return finish_program(problem, engine.machine(), res.best, res.program_evaluations, t0);
 }
 
-AlgoResult run_random_search(const FormulaProblem& problem, const EngineConfig& cfg) {
+AlgoResult run_random_search(const Problem& problem, const EngineConfig& cfg) {
     const auto t0 = clock_type::now();
     const MachineSpec spec = make_machine(problem, cfg);
     Rng rng(cfg.seed);
@@ -89,7 +74,7 @@ AlgoResult run_random_search(const FormulaProblem& problem, const EngineConfig& 
     return finish_program(problem, spec, best, evals, t0);
 }
 
-AlgoResult run_hill_climber(const FormulaProblem& problem, const EngineConfig& cfg) {
+AlgoResult run_hill_climber(const Problem& problem, const EngineConfig& cfg) {
     const auto t0 = clock_type::now();
     const MachineSpec spec = make_machine(problem, cfg);
     Rng rng(cfg.seed);

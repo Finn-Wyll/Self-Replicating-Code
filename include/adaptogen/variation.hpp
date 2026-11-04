@@ -31,4 +31,12 @@ Program random_program(const MachineSpec& spec, const VariationConfig& cfg, Rng&
 void mutate(Program& p, const MachineSpec& spec, const VariationConfig& cfg, Rng& rng, int num_outputs = 1);
 Program crossover(const Program& a, const Program& b, const VariationConfig& cfg, Rng& rng);
 
+/// Gene duplication: copy a segment of 1..max_segment instructions and insert the copy right
+/// after the original (tandem duplication). The copies are then free to diverge.
+bool duplicate_segment(Program& p, const VariationConfig& cfg, int max_segment, Rng& rng);
+
+/// Horizontal gene transfer: insert a copy of a 1..max_segment instruction segment of the
+/// donor at a random position of the recipient.
+bool transfer_segment(Program& recipient, const Program& donor, const VariationConfig& cfg, int max_segment, Rng& rng);
+
 }  // namespace adaptogen

@@ -1,0 +1,13 @@
+{
+  "population": 500,
+  "generations": 100,
+  "variation": { "p_crossover": 0.0 },
+  "mechanisms": {
+    "stress": { "enabled": true, "patience": 3, "growth": 0.5, "max_multiplier": 6 },
+    "hypermutation": { "enabled": true, "initial_rate": 1.0 },
+    "transfer": { "enabled": true, "rate": 0.2, "max_segment": 6 },
+    "duplication": { "enabled": true, "rate": 0.1, "max_segment": 6 },
+    "spatial": { "enabled": true, "radius": 1 },
+    "curriculum": { "enabled": true, "bands": 4 }
+  }
+}

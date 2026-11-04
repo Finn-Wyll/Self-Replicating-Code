@@ -141,12 +141,35 @@ Program crossover(const Program& a, const Program& b, const VariationConfig& cfg
     const int sa = rng.range(1, la), sb = rng.range(1, lb);
     const int ia = rng.range(0, la - sa), ib = rng.range(0, lb - sb);
     Program child;
+    child.mutation_rate = a.mutation_rate;
     child.code.reserve(static_cast<std::size_t>(la - sa + sb));
     child.code.insert(child.code.end(), a.code.begin(), a.code.begin() + ia);
     child.code.insert(child.code.end(), b.code.begin() + ib, b.code.begin() + ib + sb);
     child.code.insert(child.code.end(), a.code.begin() + ia + sa, a.code.end());
     if (static_cast<int>(child.code.size()) > cfg.max_length) child.code.resize(static_cast<std::size_t>(cfg.max_length));
     return child;
+}
+
+bool duplicate_segment(Program& p, const VariationConfig& cfg, int max_segment, Rng& rng) {
+    const int n = static_cast<int>(p.code.size());
+    if (n == 0) return false;
+    const int len = rng.range(1, std::min(std::max(1, max_segment), n));
+    if (n + len > cfg.max_length) return false;
+    const int start = rng.range(0, n - len);
+    std::vector<Instr> seg(p.code.begin() + start, p.code.begin() + start + len);
+    p.code.insert(p.code.begin() + start + len, seg.begin(), seg.end());
+    return true;
+}
+
+bool transfer_segment(Program& recipient, const Program& donor, const VariationConfig& cfg, int max_segment, Rng& rng) {
+    const int n = static_cast<int>(donor.code.size());
+    if (n == 0) return false;
+    const int len = rng.range(1, std::min(std::max(1, max_segment), n));
+    if (static_cast<int>(recipient.code.size()) + len > cfg.max_length) return false;
+    const int start = rng.range(0, n - len);
+    const long pos = static_cast<long>(rng.below(recipient.code.size() + 1));
+    recipient.code.insert(recipient.code.begin() + pos, donor.code.begin() + start, donor.code.begin() + start + len);
+    return true;
 }
 
 }  // namespace adaptogen

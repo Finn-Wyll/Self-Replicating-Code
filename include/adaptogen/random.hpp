@@ -58,6 +58,16 @@ public:
         return std::sqrt(-2.0 * std::log(u1)) * std::cos(6.283185307179586 * u2);
     }
 
+    /// Poisson-distributed count (Knuth's method; fine for the small means used here).
+    int poisson(double mean) {
+        if (mean <= 0) return 0;
+        if (mean > 50) mean = 50;
+        const double limit = std::exp(-mean);
+        int k = 0;
+        for (double p = uniform(); p > limit; p *= uniform()) ++k;
+        return k;
+    }
+
     /// Independent child generator.
     Rng split() { return Rng(next()); }
 

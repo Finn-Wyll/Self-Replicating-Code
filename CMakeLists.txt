@@ -29,7 +29,8 @@ add_library(adaptogen
   src/engine.cpp
   src/serialize.cpp
   src/registry.cpp
-  src/problems/formula.cpp)
+  src/problems/formula.cpp
+  src/problems/lists.cpp)
 target_include_directories(adaptogen PUBLIC include)
 target_link_libraries(adaptogen PUBLIC nlohmann_json::nlohmann_json Threads::Threads)
 target_compile_options(adaptogen PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic>)
