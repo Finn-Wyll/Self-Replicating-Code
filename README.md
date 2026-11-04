@@ -177,6 +177,10 @@ can repurpose) and what is new. It warns when a matched channel's units or descr
 | `--map OLD=NEW` | Connect a strain channel to a differently named problem channel |
 | `--library DIR` | Library folder (default `$ADAPTOGEN_LIBRARY` or `./strains`) |
 
+**Does it help?** On the same task with new data, reviving a strain solved every run in the first
+generation at 1% of the cost of starting from scratch. Transfer to a *different* task
+(sum → max) helped only slightly so far. See [benchmarks/RESULTS.md](benchmarks/RESULTS.md) §4.
+
 The same settings live in the config's `"seeding"` section, so a JSON config fully describes a
 seeded run. Generated C++ base classes from strains (deriving new problems from a strain's
 interface) come with the plug-in SDK in stage 4.

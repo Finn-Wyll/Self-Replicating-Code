@@ -212,3 +212,44 @@ On 4 cores these took about 15 and 40 minutes. The sweep and the final compariso
 (about 45 and 90 minutes) are driven by `--variant NAME=JSON` config overlays and
 `--seed-base`. [sweep.md](sweep.md) and [final.md](final.md) record the budget, seed base and
 every variant's exact overlay. The same seeds give identical results on the same platform.
+
+## 4. Strain bank: does reviving a saved strain help? (stage 3)
+
+Five independent donor strains were evolved for **list-sum**, each one generalising perfectly
+to the unseen longer test lists. A **control donor**, a koza1 formula strain whose sensors don't
+exist on list problems, so its sensing becomes pseudogenes, tests whether "starting from any
+evolved code" alone explains a gain. Donors are in [strains/](strains/). Targets were run on
+fresh seeds (6000+), 20 runs each, standard budget (50,000 evaluations), with 10% of the starting
+population random. Table: [transfer.md](transfer.md), data: [transfer.csv](transfer.csv).
+
+| Variant | list-sum (new data) | list-max | list-count_positive |
+|---|---|---|---|
+| from scratch (baseline) | 5/20 · median 49,901 evals | 1/20 · median accuracy 0.11 | 0/20 |
+| from one sum strain | **20/20 · 500 evals** (p < 0.001) | **5/20** · 0.19 (p = 0.18) | 0/20 |
+| from five sum strains (multiple parents) | **20/20 · 500 evals** | 0/20 · 0.07 | 0/20 · 0.035 |
+| from one sum strain + retain 0.3 | **20/20 · 500 evals** | 1/20 · 0.13 | 0/20 |
+| control: unrelated koza1 strain | 5/20 | 3/20 · 0.10 | 0/20 |
+
+### Findings
+
+1. **Reusing a strain on the same task with new data is a huge win.** Every seeded run solved
+   list-sum in the first generation, at **1% of the cost** (500 vs ~50,000 evaluations), against
+   5/20 from scratch. The unrelated control did no better than scratch. So the gain comes from
+   the strain's actual code, not from seeding as such. This is the core "save a solution, reuse
+   it" use case.
+2. **Transfer to a *different* task is weak so far.** Starting from a sum strain gave the best
+   result on list-max (5/20 vs 1/20, median accuracy 0.19 vs 0.11), but that is not significant
+   (p = 0.18). On count_positive nothing worked.
+3. **More parents is not automatically better.** Seeding from all five sum strains *hurt* on
+   list-max (0/20). With 90% of the population cloned from five near-identical solutions, there was
+   less useful diversity than with one strain plus its mutants.
+4. **Retention works as intended but costs time.** With retain 0.3 the run also scores on the
+   parent task (2–3× slower per run) and did not help the new task here. It is for keeping a
+   general ability, not for learning faster.
+5. **Why cross-task transfer is weak: bloated donors.** The donor strains carry a lot of
+   leftover code (e.g. 128 instructions, ~50 counted effective). Turning "sum" into "max" is
+   conceptually one change (`+` → `max`) plus initialising the accumulator. In a messy program it
+   takes several coordinated mutations, and the sum strain scores badly as a "max" program, so
+   selection discards it early. Simplifying strains before saving (removing dead and redundant
+   code, which is stage 6's simplifier) is the most promising fix, together with a
+   higher `random_fraction` when the target task differs.
