@@ -1,0 +1,5 @@
+{
+  "mechanisms": {
+    "transfer": { "enabled": true, "rate": 0.05 }
+  }
+}

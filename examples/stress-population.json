@@ -1,0 +1,5 @@
+{
+  "mechanisms": {
+    "stress": { "enabled": true, "trigger": "population", "patience": 15 }
+  }
+}

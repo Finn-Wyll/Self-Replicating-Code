@@ -100,6 +100,96 @@ research result and the starting point for the next experiments:
 - **Parameter sweeps** per mechanism (rates, segment sizes, band counts) instead of single defaults.
 - **More runs** (50–100) for the promising signals (stress and duplication on koza1).
 
+## 3. Testing the mechanisms properly: sweep on tuning seeds, then a long run on fresh seeds
+
+Sections 1 and 2 used untuned defaults and a short budget. This section follows up the
+suggestions above with a cleaner method:
+
+1. **Benchmark fixes first.**
+   - List benchmark v2: 100 training lists up to length 20, test lists up to 50.
+   - A new **validation split** (`validation_fraction`): 25% of training cases are held back
+     and used only to choose the final program.
+
+   20-run check, seeds 2000+: 3/1/0 solved runs (sum/max/count) without validation vs
+   1/4/0 with it, so no measurable effect. The list failures turned out to be mostly a
+   *search* problem (training accuracy is low too), not memorisation. Validation stays on for
+   list benchmarks as a cheap safeguard.
+2. **New stress trigger.** `"trigger": "population"` raises mutation only when the *best*
+   program has stopped improving, instead of per lineage.
+3. **Parameter sweep on tuning seeds** (3000+): 22 settings across the six mechanisms, 5
+   benchmarks where something gets solved (koza1, nguyen10, keijzer6, list-sum, list-max),
+   20 runs each, standard budget. Full table: [sweep.md](sweep.md), data: [sweep.csv](sweep.csv).
+4. **Final comparison on fresh seeds** (5000+, never used for tuning). Each mechanism uses its
+   best tuned setting, at **5× the budget** (500 generations). "combined" = the three settings
+   that beat the baseline during tuning. Table: [final.md](final.md), data: [final.csv](final.csv).
+
+### Sweep (tuning seeds, 100 runs per setting = 5 benchmarks × 20)
+
+| Mechanism | Settings tried → solved (of 100) | Baseline |
+|---|---|---|
+| stress | lineage p3: 24 · lineage p10: 22 · lineage p10 mild: 20 · **population p5: 26 · population p15: 27** | 24 |
+| hypermutation | default: 17 · slow: 16 · **start rate 2: 29** | 24 |
+| transfer | **rate 0.05: 28** · 0.2: 23 · 0.5: 19 · segments ≤2: 18 · ≤12: 18 | 24 |
+| duplication | rate 0.05: 20 · 0.1: 20 · 0.3: 17 · segments ≤12: 20 | 24 |
+| spatial | radius 1: 17 · 2: 13 · 3: 15 | 24 |
+| curriculum | 2 bands: 13 · 4 bands: 12 | 24 |
+
+### Final (fresh seeds, 5× budget): solved runs of 20
+
+| Variant | koza1 | nguyen10 | keijzer6 | list-sum | list-max | **total (of 100)** | pooled p vs baseline* |
+|---|---|---|---|---|---|---|---|
+| baseline | 7 | 4 | 6 | **12** | 4 | 33 | – |
+| stress (population, patience 15) | 9 | 5 | 8 | 11 | **7** | **40** | 0.37 |
+| transfer (rate 0.05) | 10 | **7** | 9 | 7 | **7** | **40** | 0.38 |
+| spatial (radius 1) | 9 | 4 | **12** | 3 (p = 0.008, worse) | **7** | 35 | 0.88 |
+| duplication (segments ≤ 12) | **11** | 5 | 6 | 8 | 2 | 32 | 1.00 |
+| hypermutation (start rate 2) | 8 | 4 | 9 | 7 | 3 | 31 | 0.88 |
+| combined (stress + transfer + hypermutation) | 9 | 6 | 6 | 6 | 4 | 31 | 0.88 |
+| curriculum (radius 2, 2 bands) | **11** | 4 | 8 | 1 (p < 0.001, worse) | 5 | 29 | 0.64 |
+
+\* Cochran–Mantel–Haenszel test, stratified by benchmark (pools the evidence across problems).
+
+### Findings
+
+1. **Still no statistically significant overall improvement.** The best mechanisms gain +7 solved
+   runs out of 100 (40 vs 33), p ≈ 0.37. To confirm an effect of that size at p < 0.05 would
+   need roughly 300+ runs per variant.
+2. **Two mechanisms are consistently, if modestly, positive: population-level stress and
+   low-rate horizontal transfer.** They are the only ones that beat the baseline on *both*
+   independent seed sets (tuning: 27 and 28 vs 24; final: 40 and 40 vs 33). Each matches or beats
+   the baseline on 4 of 5 problems. This is the most credible signal so far.
+3. **The sharper stress trigger was the right fix.** Stress on the whole population when the
+   best program stalls (26–27) beat per-lineage stress (20–24) in the sweep. That fits the SOS
+   picture better: a strong response when the population is genuinely stuck, not constant
+   background mutagenesis.
+4. **Horizontal transfer works only at low rates.** Rate 0.05 was best and 0.5 clearly worst.
+   Occasional, small exchanges help; frequent exchange homogenises the population.
+5. **The winner's curse is real.** Hypermutation with start rate 2 was the *best* setting in
+   tuning (29) but slightly below the baseline on fresh seeds (31 vs 33). Without the separate
+   final run we would have wrongly declared it the winner.
+6. **Spatial structure helps some problems and badly hurts others.** With the longer budget it
+   doubled the success on the extrapolation problem (keijzer6: 12 vs 6) and needed fewer
+   evaluations. But it was significantly worse at discovering list loops (list-sum: 3 vs 12,
+   p = 0.008). The MEGA-plate curriculum was even worse there (1 vs 12, p < 0.001).
+   Evidently a rare, fragile discovery like a working loop needs to spread through the whole
+   population fast, which local competition prevents.
+7. **Combining mechanisms does not add up.** The three tuned "winners" together (31) did worse
+   than two of them alone (40). The mechanisms interact: each adds variation, and together they
+   overshoot.
+8. **More budget matters more than any mechanism.** The baseline rose from 2–3/20 to 12/20 on
+   list-sum with 5× the budget.
+
+### Recommendation
+
+- Keep all mechanisms **off by default**. None has earned a default-on place yet.
+- For users who want to try them, the evidence favours `stress` with
+  `"trigger": "population", "patience": 15` and `transfer` with `"rate": 0.05`, used
+  **separately**.
+- Avoid `spatial` and `curriculum` for algorithmic (loop-discovery) problems. Consider `spatial`
+  for problems that need extrapolation and diversity.
+- To get a definite answer on stress and transfer: 100+ runs per variant on these five
+  benchmarks (≈ 8 hours on 4 cores), or a faster VM first.
+
 ## Reproduce
 
 ```bash
@@ -118,5 +208,7 @@ cmake --build build -j
 ./build/adaptogen-compare --suite mechanisms --runs 20
 ```
 
-On 4 cores these took about 15 and 40 minutes. The same seeds give identical results on the
-same platform.
+On 4 cores these took about 15 and 40 minutes. The sweep and the final comparison in section 3
+(about 45 and 90 minutes) are driven by `--variant NAME=JSON` config overlays and
+`--seed-base`. [sweep.md](sweep.md) and [final.md](final.md) record the budget, seed base and
+every variant's exact overlay. The same seeds give identical results on the same platform.

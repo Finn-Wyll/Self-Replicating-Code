@@ -112,12 +112,19 @@ like real bacteria.
 
 | Mechanism | Biology | What the engine does |
 |---|---|---|
-| `stress` | SOS response | A lineage that has not improved for `patience` generations gets up to `max_multiplier`× more mutations |
+| `stress` | SOS response | When progress stalls for `patience` generations (per lineage, or `"trigger": "population"` for the whole population), offspring get up to `max_multiplier`× more mutations |
 | `hypermutation` | Mutator strains | Every program carries a heritable mutation rate that itself mutates (log-normal steps) |
 | `transfer` | Plasmids / conjugation | Offspring receive a short code segment (1..`max_segment`) from a random neighbour |
 | `duplication` | Gene duplication | A code segment is copied in place; the copies can then diverge |
 | `spatial` | Colonies on a plate | Population on a torus; offspring compete with the cell they would replace |
 | `curriculum` | MEGA-plate gradient | Grid columns form bands judged on progressively harder subsets of the cases (needs `spatial`) |
+
+**What the experiments say so far** ([benchmarks/RESULTS.md](benchmarks/RESULTS.md)): no
+mechanism is a statistically significant improvement yet, so all are off by default. The most
+consistent, modest gains came from population-level stress
+([examples/stress-population.json](examples/stress-population.json)) and low-rate horizontal
+transfer ([examples/transfer-low.json](examples/transfer-low.json)), each used on its own.
+`spatial` and `curriculum` hurt loop discovery on list problems.
 
 Per-generation statistics (mean mutation rate, mean stress multiplier, number of transfers and
 duplications) appear in `--json` output under `population_stats`.
@@ -170,6 +177,6 @@ include/adaptogen/   public API (vm, problem, engine, variation, analysis, seria
 src/                 engine implementation, CLI, built-in problems
 bench/               comparison tool and baseline algorithms
 tests/               unit tests (self-contained runner)
-examples/            configs (quick.json, bacterial.json) and data
+examples/            configs (quick, bacterial, stress-population, transfer-low) and data
 benchmarks/          comparison results
 ```
