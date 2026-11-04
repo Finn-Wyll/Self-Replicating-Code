@@ -30,6 +30,7 @@ add_library(adaptogen
   src/serialize.cpp
   src/registry.cpp
   src/strain.cpp
+  src/simplify.cpp
   src/problems/formula.cpp
   src/problems/lists.cpp)
 target_include_directories(adaptogen PUBLIC include)

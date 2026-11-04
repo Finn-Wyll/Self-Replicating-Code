@@ -92,6 +92,12 @@ target unless you pass `--param target_column=NAME`.
 | Introns | Instructions without effect | Non-coding DNA |
 | `length_cost` / `time_cost` | Fitness penalty for size / runtime | Cost of resistance |
 
+**Simplification.** By default the final program is simplified before it is printed or saved.
+Statements are deleted, and ifs/loops unwrapped, as long as **no training case scores worse**,
+checked case by case. Evolved programs typically shrink 3–25× (e.g. 128 → 5 instructions)
+into readable code. Test data is never used for this. `--no-simplify` keeps the raw program;
+`--out` files contain both.
+
 Every instruction sequence is a valid program: division, `log` and `exp` are protected, loops are
 capped and every run has a step limit. So mutation can never "break" a program; it can only
 change what it does.
@@ -148,6 +154,10 @@ the starting point for a related problem.
 
 ```bash
 ./build/adaptogen strains check list-sum --problem list --param task=count_positive
+```
+
+```bash
+./build/adaptogen strains simplify list-sum     # save a cleaned-up next version (lineage kept)
 ```
 
 ```bash

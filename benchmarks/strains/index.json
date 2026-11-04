@@ -109,6 +109,106 @@
         "rmse": 0.08331518252994854
       },
       "version": 1
+    },
+    {
+      "channels": [
+        "list.length",
+        "list.item"
+      ],
+      "created": "2026-11-04T16:00:50Z",
+      "description": "sums a list of numbers (donor, seed 2) (simplified)",
+      "id": "list-sum-v6",
+      "name": "list-sum",
+      "parents": [
+        "list-sum-v1"
+      ],
+      "problem": "list {\"task\":\"sum\"}",
+      "solved_test": true,
+      "test_metrics": {
+        "accuracy": 1.0,
+        "mae": 0.0
+      },
+      "version": 6
+    },
+    {
+      "channels": [
+        "list.length",
+        "list.item"
+      ],
+      "created": "2026-11-04T16:00:50Z",
+      "description": "sums a list of numbers (donor, seed 12) (simplified)",
+      "id": "list-sum-v7",
+      "name": "list-sum",
+      "parents": [
+        "list-sum-v2"
+      ],
+      "problem": "list {\"task\":\"sum\"}",
+      "solved_test": true,
+      "test_metrics": {
+        "accuracy": 1.0,
+        "mae": 0.0
+      },
+      "version": 7
+    },
+    {
+      "channels": [
+        "list.length",
+        "list.item"
+      ],
+      "created": "2026-11-04T16:00:50Z",
+      "description": "sums a list of numbers (donor, seed 17) (simplified)",
+      "id": "list-sum-v8",
+      "name": "list-sum",
+      "parents": [
+        "list-sum-v3"
+      ],
+      "problem": "list {\"task\":\"sum\"}",
+      "solved_test": true,
+      "test_metrics": {
+        "accuracy": 1.0,
+        "mae": 0.0
+      },
+      "version": 8
+    },
+    {
+      "channels": [
+        "list.length",
+        "list.item"
+      ],
+      "created": "2026-11-04T16:00:50Z",
+      "description": "sums a list of numbers (donor, seed 19) (simplified)",
+      "id": "list-sum-v9",
+      "name": "list-sum",
+      "parents": [
+        "list-sum-v4"
+      ],
+      "problem": "list {\"task\":\"sum\"}",
+      "solved_test": true,
+      "test_metrics": {
+        "accuracy": 1.0,
+        "mae": 0.0
+      },
+      "version": 9
+    },
+    {
+      "channels": [
+        "list.length",
+        "list.item"
+      ],
+      "created": "2026-11-04T16:00:50Z",
+      "description": "sums a list of numbers (donor, seed 21) (simplified)",
+      "id": "list-sum-v10",
+      "name": "list-sum",
+      "parents": [
+        "list-sum-v5"
+      ],
+      "problem": "list {\"task\":\"sum\"}",
+      "solved_test": true,
+      "test_metrics": {
+        "accuracy": 1.0,
+        "mae": 0.0
+      },
+      "version": 10
     }
   ]
 }

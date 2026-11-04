@@ -11,6 +11,7 @@
 #include "adaptogen/engine.hpp"
 #include "adaptogen/registry.hpp"
 #include "adaptogen/serialize.hpp"
+#include "adaptogen/simplify.hpp"
 #include "adaptogen/strain.hpp"
 
 using namespace adaptogen;
@@ -39,6 +40,8 @@ evolve options:
   --json                 machine-readable output: one JSON event per line
   --quiet                only print the final result
   --all                  also show non-effective code (introns)
+  --no-simplify          keep the raw evolved program (default: remove code that does not
+                         change any training case's score, verified case by case)
 
 strain bank (saved programs that can be revived on new problems):
   --save-strain NAME     save the result as strain NAME-v<next version>
@@ -52,6 +55,7 @@ strain bank (saved programs that can be revived on new problems):
   adaptogen strains list [--library DIR]
   adaptogen strains show ID [--all]                     interface, behaviour and lineage
   adaptogen strains check ID --problem NAME [--params JSON] [--param K=V] [--map OLD=NEW]
+  adaptogen strains simplify ID                         save a simplified new version (verified)
   adaptogen strains reindex [--library DIR]
 )";
 
@@ -121,7 +125,7 @@ int cmd_evolve(const std::vector<std::string>& args) {
     cfg.seeding.library = default_library();
     json overrides = json::object();
     json seeding = json::object();
-    bool json_out = false, quiet = false, show_all = false;
+    bool json_out = false, quiet = false, show_all = false, do_simplify = true;
 
     for (std::size_t i = 0; i < args.size(); ++i) {
         const std::string& a = args[i];
@@ -129,7 +133,8 @@ int cmd_evolve(const std::vector<std::string>& args) {
             if (i + 1 >= args.size()) throw std::runtime_error(a + " needs a value");
             return args[++i];
         };
-        if (a == "--problem") problem_name = next();
+        if (a == "--no-simplify") do_simplify = false;
+        else if (a == "--problem") problem_name = next();
         else if (a == "--params") params.update(json::parse(next()));
         else if (a == "--param") { auto [k, v] = key_value(next()); params[k] = v; }
         else if (a == "--config") config_from_json(cfg, read_json(next()));
@@ -218,12 +223,25 @@ int cmd_evolve(const std::vector<std::string>& args) {
                     cfg.generations, static_cast<unsigned long long>(cfg.seed));
 
     PreparedRun prepared;
-    const EvolutionResult res = run_evolution(*problem, cfg, on_generation, &prepared);
+    EvolutionResult res = run_evolution(*problem, cfg, on_generation, &prepared);
+    const std::size_t raw_length = res.best.size();
+    const Program raw_program = res.best;
+    if (do_simplify) {
+        // Verify against what the run optimised (including retained parent problems).
+        const auto sr = simplify(prepared.problem(*problem), spec, res.best);
+        res.best = sr.program;
+        const Problem& scored = prepared.problem(*problem);
+        res.train_metrics = scored.metrics(spec, res.best, Split::Train);
+        res.test_metrics = scored.metrics(spec, res.best, Split::Test);
+        res.solved_train = problem->solved(spec, res.best, Split::Train);
+        res.solved_test = problem->solved(spec, res.best, Split::Test);
+    }
 
     const json problem_spec = {{"name", problem_name}, {"params", params}, {"seed", cfg.seed}};
     json saved = result_to_json(spec, res);
     saved["problem"] = problem_spec;
     saved["config"] = config_to_json(cfg);
+    if (do_simplify) saved["raw_program"] = program_to_json(spec, raw_program);
     std::string strain_id;
     if (!save_strain.empty()) {
         std::vector<std::string> parents;
@@ -240,6 +258,9 @@ int cmd_evolve(const std::vector<std::string>& args) {
                     res.solved_train ? "SOLVED" : "finished", res.generations, res.program_evaluations, res.seconds);
         std::printf("  train: %s\n  test (unseen): %s%s\n\n", metrics_line(res.train_metrics).c_str(),
                     metrics_line(res.test_metrics).c_str(), res.solved_test ? "  [solved]" : "");
+        if (do_simplify && raw_length != res.best.size())
+            std::printf("simplified from %zu to %zu instructions (same score on every training case)\n", raw_length,
+                        res.best.size());
         std::printf("evolved program (%zu instructions, %zu effective):\n%s", res.best.size(),
                     effective_length(spec, res.best, problem->num_outputs()),
                     to_pseudocode(spec, res.best, problem->num_outputs(), !show_all).c_str());
@@ -336,6 +357,31 @@ int cmd_strains(std::vector<std::string> args) {
             for (std::size_t k = 1; k < anc.size(); ++k)
                 std::printf("    %s  (%s)\n", anc[k].id.c_str(), anc[k].problem.value("name", "?").c_str());
         }
+        return 0;
+    }
+    if (sub == "simplify") {
+        if (!s.problem.contains("name")) throw std::runtime_error("strain " + s.id + " does not record its problem");
+        register_builtin_problems();
+        auto problem = make_problem(s.problem.at("name").get<std::string>(), s.problem.value("params", json::object()),
+                                    s.problem.value("seed", std::uint64_t{1}));
+        EngineConfig cfg;
+        if (!s.config.empty()) config_from_json(cfg, s.config);
+        const MachineSpec spec = make_machine(*problem, cfg);
+        const Program before = program_from_json(spec, s.program);
+        const auto sr = simplify(*problem, spec, before);
+        EvolutionResult r;
+        r.best = sr.program;
+        r.generations = s.generations;
+        r.program_evaluations = s.program_evaluations;
+        r.train_metrics = problem->metrics(spec, r.best, Split::Train);
+        r.test_metrics = problem->metrics(spec, r.best, Split::Test);
+        r.solved_test = problem->solved(spec, r.best, Split::Test);
+        Strain out = make_strain(s.name, s.description.empty() ? "simplified" : s.description + " (simplified)", *problem,
+                                 spec, r, s.problem, cfg, {s.id});
+        const std::string id2 = lib.save(out);
+        std::printf("%s: %zu -> %zu instructions (%d edits, verified on %zu training cases); saved as %s\n",
+                    s.id.c_str(), sr.length_before, sr.length_after, sr.accepted_changes,
+                    problem->num_cases(Split::Train), id2.c_str());
         return 0;
     }
     if (sub == "check") {

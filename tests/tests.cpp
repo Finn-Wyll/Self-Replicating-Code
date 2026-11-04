@@ -12,6 +12,7 @@
 #include "adaptogen/problems/lists.hpp"
 #include "adaptogen/registry.hpp"
 #include "adaptogen/serialize.hpp"
+#include "adaptogen/simplify.hpp"
 #include "adaptogen/strain.hpp"
 
 #include <filesystem>
@@ -537,6 +538,41 @@ TEST(retention_scores_parent_problems) {
     const double mixed = p.mean_score(spec, prep.seeds[0], Split::Train);
     const double primary = max->mean_score(spec, prep.seeds[0], Split::Train);
     CHECK_NEAR(mixed, 0.7 * primary + 0.3 * 0.0, 1e-9);
+}
+
+TEST(simplifier_reduces_to_the_essential_loop) {
+    auto sum = ListProblem::from_params({{"task", "sum"}}, 1);
+    const MachineSpec s = make_machine(*sum, EngineConfig{});
+    // A sum loop buried in junk: dead constants, a no-op if, a redundant copy.
+    Program bloated{{I(Op::Const, 5, 0, 0, 0, 2.0), I(Op::Sense, 1, 0, 0, 0, 0, 0), I(Op::IfLt, 0, 5, 6),
+                     I(Op::Mul, 7, 5, 5), I(Op::Loop, 2, 1, 0, 3), I(Op::Mov, 6, 2), I(Op::Sense, 3, 2, 0, 0, 0, 1),
+                     I(Op::Add, 0, 0, 3), I(Op::Sin, 4, 4)}};
+    CHECK(sum->solved(s, bloated, Split::Train));
+    const auto r = simplify(*sum, s, bloated);
+    CHECK(r.length_before == 9);
+    CHECK(r.length_after == 4);  // length, loop, item, add
+    CHECK(sum->solved(s, r.program, Split::Train) && sum->solved(s, r.program, Split::Test));
+}
+
+TEST(simplifier_never_makes_any_case_worse) {
+    auto problem = FormulaProblem::from_params({{"target", "nguyen7"}}, 4);
+    const MachineSpec s = make_machine(*problem, EngineConfig{});
+    VariationConfig v;
+    v.init_min_length = 20;
+    v.init_max_length = 60;
+    Rng rng(12);
+    int shrunk = 0;
+    for (int t = 0; t < 40; ++t) {
+        const Program p = random_program(s, v, rng);
+        const auto r = simplify(*problem, s, p);
+        CHECK(r.length_after <= r.length_before);
+        shrunk += r.length_after < r.length_before;
+        Runner a(s), b(s);
+        for (std::size_t c = 0; c < problem->num_cases(Split::Train); ++c)
+            CHECK(problem->evaluate_case(b, r.program, Split::Train, c) >=
+                  problem->evaluate_case(a, p, Split::Train, c) - 1e-9);
+    }
+    CHECK(shrunk > 30);
 }
 
 TEST(seeding_config_round_trip) {
