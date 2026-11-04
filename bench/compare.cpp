@@ -146,7 +146,7 @@ int main(int argc, char** argv) {
     int runs = 20, population = 500, generations = 100, threads = 0;
     std::uint64_t seed_base = 1000;
     int case_budget_gens = 0;  // >0: budget in case evaluations = population x N x training cases
-    bool validation = true;
+    bool validation = true, reference = false;
     std::vector<std::string> targets, only;
     std::vector<std::pair<std::string, nlohmann::json>> variants;
     nlohmann::json common = nlohmann::json::object();
@@ -167,6 +167,7 @@ int main(int argc, char** argv) {
         else if (a == "--seed-base") seed_base = std::stoull(next());
         else if (a == "--case-budget-gens") case_budget_gens = std::stoi(next());
         else if (a == "--no-validation") validation = false;
+        else if (a == "--reference") reference = true;  // add tree GP (formula benchmarks) as a reference
         else if (a == "--set") {  // config overlay applied to every adaptogen run, e.g. --set '{"length_cost":0.01}'
             common.update(nlohmann::json::parse(next()));
         } else if (a == "--variant") {  // NAME=JSON config overlay, e.g. stress10={"mechanisms":{"stress":{"enabled":true}}}
@@ -182,6 +183,7 @@ int main(int argc, char** argv) {
                          "         [--generations N] [--threads N] [--target NAME]... [--algorithm NAME]... [--out PREFIX]\n"
                          "         [--seed-base N] [--no-validation] [--set JSON] [--variant NAME=JSON]...\n"
                          "         [--case-budget-gens N]  (budget = population x N x training cases, in case evaluations)\n"
+                         "         [--reference]  (custom suite: add tree GP on formula benchmarks)\n"
                          "suites: baselines, mechanisms, custom (baseline + --variant entries)\n"
                          "targets: koza1 nguyen5 nguyen7 nguyen10 pagie1 keijzer6 list-sum list-max list-count_positive\n");
             return 1;
@@ -195,6 +197,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "unknown suite '%s'\n", suite.c_str());
         return 1;
     }
+    if (reference && suite == "custom") algos.push_back(mechanism_suite().back());  // tree-gp
     for (const auto& [name, overlay] : variants) {
         const nlohmann::json o = overlay;
         algos.push_back({name, "config overlay: " + o.dump(), run_adaptogen,
@@ -251,10 +254,12 @@ int main(int argc, char** argv) {
                 config_from_json(cfg, common);
                 algo.configure(cfg);
                 auto problem = bench.make(cfg.seed);
-                if (case_budget_gens > 0) {
+                if (case_budget_gens > 0 && !algo.formula_only) {  // baselines without a case budget keep N generations
                     cfg.max_case_evaluations = static_cast<long>(population) * case_budget_gens *
                                                static_cast<long>(problem->num_cases(Split::Train));
                     cfg.generations = 1000000;  // the case budget decides when to stop
+                } else if (case_budget_gens > 0) {
+                    cfg.generations = case_budget_gens;  // tree GP evaluates every case: same budget
                 }
                 results[r] = algo.run(*problem, cfg);
                 std::lock_guard<std::mutex> lock(mu);
