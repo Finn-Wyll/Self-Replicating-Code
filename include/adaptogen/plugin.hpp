@@ -88,6 +88,10 @@ private:
     mutable long failures_ = 0;
 };
 
+/// Start evolution from a plug-in's parent strains, with the channel maps it declares. Throws if
+/// the problem is not a plug-in derived from strains.
+void seed_from_parents(const Problem& problem, EngineConfig& cfg);
+
 /// "plugin:<path>" problems: builds sources first (throws with compiler diagnostics on failure).
 std::unique_ptr<PluginProblem> make_plugin_problem(const std::string& path, const nlohmann::json& params,
                                                    std::uint64_t seed);

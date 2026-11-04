@@ -11,6 +11,7 @@
 #include "adaptogen/analysis.hpp"
 #include "adaptogen/registry.hpp"
 #include "adaptogen/serialize.hpp"
+#include "adaptogen/simplify.hpp"
 
 namespace adaptogen {
 
@@ -45,11 +46,6 @@ Channel channel_from(const json& j) {
     return c;
 }
 
-json metrics_json(const std::vector<Metric>& ms) {
-    json j = json::object();
-    for (const auto& m : ms) j[m.name] = m.value;
-    return j;
-}
 
 json read_file(const fs::path& p) {
     std::ifstream in(p);
@@ -181,8 +177,8 @@ Strain make_strain(const std::string& name, const std::string& description, cons
     s.config = config_to_json(config);
     s.generations = result.generations;
     s.program_evaluations = result.program_evaluations;
-    s.train_metrics = metrics_json(result.train_metrics);
-    s.test_metrics = metrics_json(result.test_metrics);
+    s.train_metrics = metrics_to_json(result.train_metrics);
+    s.test_metrics = metrics_to_json(result.test_metrics);
     s.solved_test = result.solved_test;
     for (const auto& e : result.lineage)
         s.events.push_back({{"generation", e.generation}, {"fitness", e.fitness}, {"origin", e.origin}});
@@ -414,6 +410,56 @@ EvolutionResult run_evolution(const Problem& problem, const EngineConfig& cfg,
     EvolutionResult result = engine.run();
     if (prepared_out) *prepared_out = std::move(prepared);
     return result;
+}
+
+// ------------------------------------------------------------------ workflow helpers
+
+void finish_result(const Problem& optimised, const Problem& primary, const MachineSpec& spec, EvolutionResult& r) {
+    r.best = simplify(optimised, spec, r.best).program;
+    r.train_metrics = optimised.metrics(spec, r.best, Split::Train);
+    r.test_metrics = optimised.metrics(spec, r.best, Split::Test);
+    r.solved_train = primary.solved(spec, r.best, Split::Train);
+    r.solved_test = primary.solved(spec, r.best, Split::Test);
+}
+
+std::unique_ptr<Problem> strain_problem(const Strain& s, EngineConfig* cfg_out) {
+    if (!s.problem.contains("name")) throw std::runtime_error("strain " + s.id + " does not record its problem");
+    register_builtin_problems();
+    if (cfg_out && !s.config.empty()) config_from_json(*cfg_out, s.config);
+    return make_problem(s.problem.at("name").get<std::string>(), s.problem.value("params", json::object()),
+                        s.problem.value("seed", std::uint64_t{1}));
+}
+
+SimplifiedStrain simplified_strain(const Strain& s) {
+    EngineConfig cfg;
+    auto problem = strain_problem(s, &cfg);
+    const MachineSpec spec = make_machine(*problem, cfg);
+    const SimplifyResult sr = simplify(*problem, spec, program_from_json(spec, s.program));
+    EvolutionResult r;
+    r.best = sr.program;
+    r.generations = s.generations;
+    r.program_evaluations = s.program_evaluations;
+    r.train_metrics = problem->metrics(spec, r.best, Split::Train);
+    r.test_metrics = problem->metrics(spec, r.best, Split::Test);
+    r.solved_test = problem->solved(spec, r.best, Split::Test);
+    SimplifiedStrain out;
+    out.strain = make_strain(s.name, s.description.empty() ? "simplified" : s.description + " (simplified)", *problem, spec,
+                             r, s.problem, cfg, {s.id});
+    out.length_before = sr.length_before;
+    out.length_after = sr.length_after;
+    out.edits = sr.accepted_changes;
+    out.training_cases = problem->num_cases(Split::Train);
+    return out;
+}
+
+json adapted_params(const Strain& s, const std::vector<std::string>& new_files, bool only_new) {
+    json params = s.problem.value("params", json::object());
+    if (!params.contains("data"))
+        throw std::runtime_error("strain " + s.id + " was not evolved from data (adapt works for e.g. the decisions problem)");
+    json files = only_new ? json::array() : (params.at("data").is_array() ? params.at("data") : json::array({params.at("data")}));
+    for (const auto& f : new_files) files.push_back(f);
+    params["data"] = s.problem.value("name", "") == "decisions" ? files : json(files.back());
+    return params;
 }
 
 // ------------------------------------------------------------------ retention

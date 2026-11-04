@@ -125,6 +125,26 @@ EvolutionResult run_evolution(const Problem& problem, const EngineConfig& cfg,
                               const std::function<void(const GenerationReport&)>& on_generation = {},
                               PreparedRun* prepared_out = nullptr, const std::atomic<bool>* stop = nullptr);
 
+/// After a run: simplify the champion, verified on the problem the run optimised (`optimised`,
+/// which includes retained parent problems), and re-score it on the primary problem.
+void finish_result(const Problem& optimised, const Problem& primary, const MachineSpec& spec, EvolutionResult& result);
+
+/// Rebuild the problem a strain evolved on, from its lineage (cfg_out receives its engine config).
+std::unique_ptr<Problem> strain_problem(const Strain& s, EngineConfig* cfg_out = nullptr);
+
+/// A simplified copy of a strain (dead code removed, verified on its own training cases), with
+/// lineage pointing at the original: ready to save as its next version.
+struct SimplifiedStrain {
+    Strain strain;
+    std::size_t length_before = 0, length_after = 0, training_cases = 0;
+    int edits = 0;
+};
+SimplifiedStrain simplified_strain(const Strain& s);
+
+/// Problem parameters for adapting a data-driven strain: its own data plus the new files
+/// (or only the new files when only_new). Throws if the strain was not evolved from data.
+nlohmann::json adapted_params(const Strain& s, const std::vector<std::string>& new_files, bool only_new);
+
 /// Wraps a problem and keeps scoring programs on parent problems too ("forgetting control").
 /// Training cases = primary cases followed by every parent's cases, rescaled so the mean case
 /// score equals (1 - w) * primary mean + w * parents' mean. Test split, metrics and `solved`

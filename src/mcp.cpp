@@ -23,6 +23,7 @@
 #include "adaptogen/serialize.hpp"
 #include "adaptogen/simplify.hpp"
 #include "adaptogen/strain.hpp"
+#include "adaptogen/text.hpp"
 
 namespace adaptogen {
 
@@ -48,7 +49,7 @@ json tool(const std::string& name, const std::string& description, json properti
                 {"inputSchema", {{"type", "object"}, {"properties", properties}, {"required", required}}}};
 }
 
-json metrics_json(const std::vector<Metric>& ms) {
+json metrics_list(const std::vector<Metric>& ms) {
     json j = json::array();
     for (const auto& m : ms) j.push_back({{"name", m.name}, {"value", m.value}});
     return j;
@@ -202,14 +203,7 @@ struct McpServer::Impl {
         }
         if (name == "plugin_new") {
             const std::string n = a.at("name").get<std::string>();
-            std::string cls;
-            bool up = true;
-            for (char c : n) {
-                if (!std::isalnum(static_cast<unsigned char>(c))) { up = true; continue; }
-                cls += up ? static_cast<char>(std::toupper(static_cast<unsigned char>(c))) : c;
-                up = false;
-            }
-            if (cls.empty() || std::isdigit(static_cast<unsigned char>(cls[0]))) cls = "P" + cls;
+            const std::string cls = class_name_for(n);
             json files = json::object();
             std::string header, base;
             if (a.contains("from_strains") && !a.at("from_strains").empty()) {
@@ -276,24 +270,11 @@ struct McpServer::Impl {
             return json{{"coverage", c.coverage()}, {"matched", c.matched}, {"missing", c.missing}, {"new", c.added}, {"warnings", c.warnings}};
         }
         if (name == "strain_simplify") {
-            const Strain s = lib.load(id);
-            register_builtin_problems();
-            auto problem = make_problem(s.problem.at("name").get<std::string>(), s.problem.value("params", json::object()),
-                                        s.problem.value("seed", std::uint64_t{1}));
-            EngineConfig cfg;
-            if (!s.config.empty()) config_from_json(cfg, s.config);
-            const MachineSpec spec = make_machine(*problem, cfg);
-            const auto sr = simplify(*problem, spec, program_from_json(spec, s.program));
-            EvolutionResult r;
-            r.best = sr.program;
-            r.generations = s.generations;
-            r.program_evaluations = s.program_evaluations;
-            r.train_metrics = problem->metrics(spec, r.best, Split::Train);
-            r.test_metrics = problem->metrics(spec, r.best, Split::Test);
-            r.solved_test = problem->solved(spec, r.best, Split::Test);
-            const std::string nid = lib.save(make_strain(s.name, s.description + " (simplified)", *problem, spec, r, s.problem, cfg, {s.id}));
-            return json{{"id", nid}, {"length_before", sr.length_before}, {"length_after", sr.length_after},
-                        {"pseudocode", to_pseudocode(spec, r.best, problem->num_outputs(), true)}};
+            const SimplifiedStrain out = simplified_strain(lib.load(id));
+            const std::string nid = lib.save(out.strain);
+            const MachineSpec spec = strain_machine(out.strain);
+            return json{{"id", nid}, {"length_before", out.length_before}, {"length_after", out.length_after},
+                        {"pseudocode", to_pseudocode(spec, program_from_json(spec, out.strain.program), out.strain.num_outputs, true)}};
         }
         if (name == "strain_lineage") return strain_lineage_report(lib, id);
         if (name == "export_cpp" || name == "export_code") {
@@ -310,12 +291,9 @@ struct McpServer::Impl {
         }
         if (name == "strain_adapt") {
             const Strain s = lib.load(id);
-            json params = s.problem.value("params", json::object());
-            if (!params.contains("data")) throw std::runtime_error("strain_adapt needs a strain evolved from data (e.g. the decisions problem)");
-            json files = a.value("only_new", false) ? json::array()
-                                                    : (params.at("data").is_array() ? params.at("data") : json::array({params.at("data")}));
+            std::vector<std::string> files;
             for (const auto& d : a.at("data")) files.push_back(inside_workspace(d.get<std::string>()).string());
-            params["data"] = s.problem.value("name", "") == "decisions" ? files : json(files.back());
+            const json params = adapted_params(s, files, a.value("only_new", false));
             json cfg = s.config;
             cfg.erase("seeding");
             if (a.contains("generations")) cfg["generations"] = a.at("generations");
@@ -351,12 +329,7 @@ struct McpServer::Impl {
         const std::string pname = problem_path(job->problem);
         const json params = a.value("params", json::object());
         auto problem = std::shared_ptr<Problem>(make_problem(pname, params, cfg.seed));
-        if (a.value("seed_parents", false)) {
-            auto* plugin = dynamic_cast<PluginProblem*>(problem.get());
-            if (!plugin || plugin->parents().empty()) throw std::runtime_error("seed_parents needs a plug-in problem derived from strains");
-            for (const auto& p : plugin->parents()) cfg.seeding.strains.push_back(p);
-            for (const auto& m : plugin->channel_maps()) cfg.seeding.channel_map.push_back(m);
-        }
+        if (a.value("seed_parents", false)) seed_from_parents(*problem, cfg);
         const std::string save = a.value("save_strain", ""), description = a.value("description", "");
         const std::string guard = a.value("only_if_not_worse_than", "");
         if (!save.empty() && !StrainLibrary::valid_name(save)) throw std::runtime_error("invalid strain name '" + save + "'");
@@ -368,21 +341,16 @@ struct McpServer::Impl {
                 EvolutionResult res = run_evolution(*problem, cfg, [&](const GenerationReport& r) {
                     std::lock_guard<std::mutex> lock(job->m);
                     job->progress = {{"generation", r.generation}, {"seconds", r.seconds}, {"case_evaluations", r.case_evaluations},
-                                     {"best_length", r.best_effective_length}, {"best_train_metrics", metrics_json(r.best_train_metrics)}};
+                                     {"best_length", r.best_effective_length}, {"best_train_metrics", metrics_list(r.best_train_metrics)}};
                 }, &prepared, &job->stop);
-                const Problem& scored = prepared.problem(*problem);
-                res.best = simplify(scored, spec, res.best).program;
-                res.train_metrics = scored.metrics(spec, res.best, Split::Train);
-                res.test_metrics = scored.metrics(spec, res.best, Split::Test);
-                res.solved_train = problem->solved(spec, res.best, Split::Train);
-                res.solved_test = problem->solved(spec, res.best, Split::Test);
+                finish_result(prepared.problem(*problem), *problem, spec, res);
                 json lineage = json::array();
                 for (const auto& e : res.lineage) lineage.push_back({{"generation", e.generation}, {"fitness", e.fitness}, {"origin", e.origin}});
                 json result = {{"generations", res.generations},
                                {"seconds", res.seconds},
                                {"solved_test", res.solved_test},
-                               {"train_metrics", metrics_json(res.train_metrics)},
-                               {"test_metrics", metrics_json(res.test_metrics)},
+                               {"train_metrics", metrics_list(res.train_metrics)},
+                               {"test_metrics", metrics_list(res.test_metrics)},
                                {"pseudocode", to_pseudocode(spec, res.best, problem->num_outputs(), true)},
                                {"program", program_to_json(spec, res.best)},
                                {"lineage", lineage}};

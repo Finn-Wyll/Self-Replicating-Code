@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <sstream>
 
+#include "adaptogen/text.hpp"
 #include "adaptogen/analysis.hpp"
 #include "adaptogen/serialize.hpp"
 
@@ -132,12 +133,6 @@ std::string strain_lineage_report(const StrainLibrary& library, const std::strin
 
 namespace {
 
-std::string identifier(const std::string& s) {
-    std::string out;
-    for (char c : s) out += std::isalnum(static_cast<unsigned char>(c)) ? c : '_';
-    if (out.empty() || std::isdigit(static_cast<unsigned char>(out[0]))) out = "_" + out;
-    return out;
-}
 
 std::string exact(double v) {  // hex float literal: the constant round-trips exactly
     char buf[64];
@@ -202,7 +197,7 @@ struct Emitter {
                 if ((ch.kind == ChannelKind::Sensor) != (in.op == Op::Sense)) break;
                 out << ind << "{\n" << ind << "    const double args[3] = {" << a << ", " << b << ", " << R(in.c) << "};\n"
                     << ind << "    " << d << " = clean(env." << (in.op == Op::Sense ? "sense" : "act") << "("
-                    << identifier(ch.name) << ", args, " << std::clamp(ch.arity, 0, 3) << "));\n"
+                    << cpp_identifier(ch.name) << ", args, " << std::clamp(ch.arity, 0, 3) << "));\n"
                     << ind << "}\n";
                 break;
             }
@@ -216,7 +211,7 @@ struct Emitter {
 
 std::string export_cpp(const MachineSpec& spec, const Program& program, int num_outputs, const std::string& name,
                        const std::string& comment) {
-    const std::string ns = identifier(name);
+    const std::string ns = cpp_identifier(name);
     bool simple = true;  // only arity-0 sensors and no actions: offer a plain function of numbers
     for (const auto& c : spec.channels) simple = simple && c.kind == ChannelKind::Sensor && c.arity == 0;
     std::ostringstream out;
@@ -231,7 +226,7 @@ std::string export_cpp(const MachineSpec& spec, const Program& program, int num_
     out << "// Channels the program uses to observe (sense) and act.\n";
     for (std::size_t k = 0; k < spec.channels.size(); ++k) {
         const Channel& c = spec.channels[k];
-        out << "constexpr int " << identifier(c.name) << " = " << k << ";  // " << to_string(c.kind) << ", " << c.arity
+        out << "constexpr int " << cpp_identifier(c.name) << " = " << k << ";  // " << to_string(c.kind) << ", " << c.arity
             << " argument(s)" << (c.units.empty() ? "" : " [" + c.units + "]") << (c.description.empty() ? "" : ": " + c.description) << "\n";
     }
     out << "\nconstexpr int kRegisters = " << spec.num_registers << ";\n"
@@ -257,10 +252,10 @@ std::string export_cpp(const MachineSpec& spec, const Program& program, int num_
     out << "}\n";
     if (simple && num_outputs >= 1) {
         out << "\n/// Convenience: the program as a plain function of its inputs.\ninline double compute(";
-        for (std::size_t k = 0; k < spec.channels.size(); ++k) out << (k ? ", " : "") << "double " << identifier(spec.channels[k].name);
+        for (std::size_t k = 0; k < spec.channels.size(); ++k) out << (k ? ", " : "") << "double " << cpp_identifier(spec.channels[k].name);
         out << ") {\n    struct Inputs : Environment {\n        double v[" << std::max<std::size_t>(1, spec.channels.size()) << "];\n"
             << "        double sense(int channel, const double*, int) override { return v[channel]; }\n    } env;\n";
-        for (std::size_t k = 0; k < spec.channels.size(); ++k) out << "    env.v[" << k << "] = " << identifier(spec.channels[k].name) << ";\n";
+        for (std::size_t k = 0; k < spec.channels.size(); ++k) out << "    env.v[" << k << "] = " << cpp_identifier(spec.channels[k].name) << ";\n";
         out << "    double r[kRegisters] = {};\n    run(env, r);\n    return r[0];\n}\n";
     }
     out << "\n}  // namespace " << ns << "\n";

@@ -55,7 +55,7 @@ file(GENERATE OUTPUT ${CMAKE_BINARY_DIR}/generated/adaptogen/build_config.hpp CO
 ")
 target_compile_options(adaptogen PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic>)
 
-add_executable(adaptogen-cli src/cli/main.cpp)
+add_executable(adaptogen-cli src/cli/main.cpp src/cli/common.cpp src/cli/evolve.cpp src/cli/strains.cpp src/cli/plugin.cpp)
 set_target_properties(adaptogen-cli PROPERTIES OUTPUT_NAME adaptogen)
 target_link_libraries(adaptogen-cli PRIVATE adaptogen)
 add_dependencies(adaptogen-cli adaptogen-worker)

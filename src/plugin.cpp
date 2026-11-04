@@ -25,6 +25,7 @@
 #include <stdexcept>
 #include <thread>
 
+#include "adaptogen/text.hpp"
 #include "adaptogen/build_config.hpp"
 #include "adaptogen/engine.hpp"
 #include "adaptogen/parallel.hpp"
@@ -449,6 +450,14 @@ BuildResult build_plugin(const fs::path& source) {
     return res;
 }
 
+void seed_from_parents(const Problem& problem, EngineConfig& cfg) {
+    const auto* plugin = dynamic_cast<const PluginProblem*>(&problem);
+    if (!plugin || plugin->parents().empty())
+        throw std::runtime_error("seeding from parents needs a plug-in problem that derives from strains");
+    for (const auto& p : plugin->parents()) cfg.seeding.strains.push_back(p);
+    for (const auto& m : plugin->channel_maps()) cfg.seeding.channel_map.push_back(m);
+}
+
 std::unique_ptr<PluginProblem> make_plugin_problem(const std::string& path, const json& params, std::uint64_t seed) {
     fs::path lib = path;
     if (is_plugin_source(lib)) {
@@ -611,12 +620,6 @@ ValidationReport validate_plugin(const fs::path& path, const json& params, std::
 
 namespace {
 
-std::string identifier(const std::string& s) {
-    std::string out;
-    for (char c : s) out += std::isalnum(static_cast<unsigned char>(c)) ? c : '_';
-    if (out.empty() || std::isdigit(static_cast<unsigned char>(out[0]))) out = "_" + out;
-    return out;
-}
 
 std::string literal(const std::string& s) {
     std::string out = "\"";
@@ -636,7 +639,7 @@ std::string literal(const std::string& s) {
 std::string generate_base_header(const std::vector<Strain>& parents, const std::string& class_name,
                                  const std::vector<std::pair<std::string, std::string>>& renames) {
     if (parents.empty()) throw std::runtime_error("at least one parent strain is needed");
-    if (identifier(class_name) != class_name) throw std::runtime_error("'" + class_name + "' is not a valid C++ class name");
+    if (cpp_identifier(class_name) != class_name) throw std::runtime_error("'" + class_name + "' is not a valid C++ class name");
     struct Merged {
         Channel c;
         std::vector<std::string> origins;
@@ -684,7 +687,7 @@ std::string generate_base_header(const std::vector<Strain>& parents, const std::
       << "class " << class_name << " : public adaptogen::sdk::Problem {\npublic:\n";
     std::set<std::string> used_ids;
     for (std::size_t i = 0; i < merged.size(); ++i) {
-        std::string id = identifier(merged[i].c.name);
+        std::string id = cpp_identifier(merged[i].c.name);
         while (!used_ids.insert(id).second) id += "_";
         const Channel& c = merged[i].c;
         h << "    static constexpr int " << id << " = " << i << ";  // " << to_string(c.kind) << ", arity " << c.arity
