@@ -3,6 +3,57 @@
   "strains": [
     {
       "channels": [
+        "option.price",
+        "option.eta_hours",
+        "option.rating",
+        "context.deadline_hours",
+        "options.count",
+        "options.price.min",
+        "options.price.max",
+        "options.eta_hours.min",
+        "options.eta_hours.max",
+        "options.rating.min",
+        "options.rating.max"
+      ],
+      "created": "2026-11-04T21:04:55Z",
+      "description": "pick the best delivery courier for an order",
+      "id": "courier-picker-v1",
+      "name": "courier-picker",
+      "parents": [],
+      "problem": "decisions {\"data\":\"examples/data/couriers.csv\"}",
+      "solved_test": false,
+      "test_metrics": {
+        "accuracy": 0.955,
+        "best_single_feature_accuracy": 0.53,
+        "best_single_feature_regret": 1.1104649999999996,
+        "linear_model_accuracy": 0.63,
+        "linear_model_regret": 1.0427449999999998,
+        "mean_regret": 0.012109999999999987,
+        "random_accuracy": 0.23658333333333345
+      },
+      "version": 1
+    },
+    {
+      "channels": [
+        "x"
+      ],
+      "created": "2026-11-04T14:07:12Z",
+      "description": "x^4+x^3+x^2+x (unrelated control donor)",
+      "id": "koza1-v1",
+      "name": "koza1",
+      "parents": [],
+      "problem": "formula {\"target\":\"koza1\"}",
+      "solved_test": false,
+      "test_metrics": {
+        "mae": 0.037214107739693365,
+        "nrmse": 0.07901453496599907,
+        "r2": 0.9937567032641069,
+        "rmse": 0.08331518252994854
+      },
+      "version": 1
+    },
+    {
+      "channels": [
         "list.length",
         "list.item"
       ],
@@ -90,25 +141,6 @@
         "mae": 0.0
       },
       "version": 5
-    },
-    {
-      "channels": [
-        "x"
-      ],
-      "created": "2026-11-04T14:07:12Z",
-      "description": "x^4+x^3+x^2+x (unrelated control donor)",
-      "id": "koza1-v1",
-      "name": "koza1",
-      "parents": [],
-      "problem": "formula {\"target\":\"koza1\"}",
-      "solved_test": false,
-      "test_metrics": {
-        "mae": 0.037214107739693365,
-        "nrmse": 0.07901453496599907,
-        "r2": 0.9937567032641069,
-        "rmse": 0.08331518252994854
-      },
-      "version": 1
     },
     {
       "channels": [

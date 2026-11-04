@@ -1,6 +1,6 @@
 #!/bin/bash
 cd /home/user/Self-Replicating-Code
-L=${LIBRARY:-strains}   # a library containing courier-picker-v1 (evolve it first, see README)
+L=${LIBRARY:-benchmarks/strains}   # contains courier-picker-v1
 D=examples/data/couriers_premium.csv
 acc() { python3 -c "import json,sys; r=[json.loads(l) for l in sys.stdin][-1]; print(r['test_metrics']['accuracy'], r['test_metrics']['linear_model_accuracy'], r['test_metrics']['best_single_feature_accuracy'])"; }
 for s in 1 2 3 4 5 6 7 8 9 10; do
