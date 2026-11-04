@@ -145,6 +145,7 @@ std::vector<Benchmark> all_benchmarks() {
 int main(int argc, char** argv) {
     int runs = 20, population = 500, generations = 100, threads = 0;
     std::uint64_t seed_base = 1000;
+    int case_budget_gens = 0;  // >0: budget in case evaluations = population x N x training cases
     bool validation = true;
     std::vector<std::string> targets, only;
     std::vector<std::pair<std::string, nlohmann::json>> variants;
@@ -164,6 +165,7 @@ int main(int argc, char** argv) {
         else if (a == "--algorithm") only.push_back(next());
         else if (a == "--suite") suite = next();
         else if (a == "--seed-base") seed_base = std::stoull(next());
+        else if (a == "--case-budget-gens") case_budget_gens = std::stoi(next());
         else if (a == "--no-validation") validation = false;
         else if (a == "--set") {  // config overlay applied to every adaptogen run, e.g. --set '{"length_cost":0.01}'
             common.update(nlohmann::json::parse(next()));
@@ -179,6 +181,7 @@ int main(int argc, char** argv) {
                          "usage: adaptogen-compare [--suite baselines|mechanisms] [--runs N] [--population N]\n"
                          "         [--generations N] [--threads N] [--target NAME]... [--algorithm NAME]... [--out PREFIX]\n"
                          "         [--seed-base N] [--no-validation] [--set JSON] [--variant NAME=JSON]...\n"
+                         "         [--case-budget-gens N]  (budget = population x N x training cases, in case evaluations)\n"
                          "suites: baselines, mechanisms, custom (baseline + --variant entries)\n"
                          "targets: koza1 nguyen5 nguyen7 nguyen10 pagie1 keijzer6 list-sum list-max list-count_positive\n");
             return 1;
@@ -208,7 +211,7 @@ int main(int argc, char** argv) {
         std::erase_if(benches, [](const Benchmark& b) { return !b.formula; });
 
     std::ofstream raw(out_prefix + ".csv");
-    raw << "benchmark,algorithm,run,seed,solved_test,test_primary,program_evaluations,seconds,size\n";
+    raw << "benchmark,algorithm,run,seed,solved_test,test_primary,program_evaluations,case_evaluations,seconds,size\n";
     std::ofstream md(out_prefix + ".md");
     md << "# Results: " << suite << "\n\n"
        << "Budget per run: population " << population << " x " << generations << " generations = "
@@ -217,6 +220,10 @@ int main(int argc, char** argv) {
        << "set** (formulas: RMSE < 1% of the target's spread; lists: every test list answered exactly). "
        << "Runs stop early when the training set is solved. p = two-sided Fisher exact test of the solved "
        << "count against the first algorithm in the table. Seeds start at " << seed_base << "."
+       << (case_budget_gens > 0 ? " Budget: " + std::to_string(case_budget_gens) +
+                                      " generation-equivalents in **case evaluations** (population x N x training cases); "
+                                      "runs may use them for more generations on fewer cases."
+                                : std::string())
        << (validation ? " List benchmarks hold back 25% of the training cases to choose the final program." : "")
        << (common.empty() ? std::string() : " Common config overlay: `" + common.dump() + "`.") << "\n\n### Algorithms\n\n";
     for (const auto& a : algos) md << "- **" << a.name << "**: " << a.description << "\n";
@@ -228,8 +235,8 @@ int main(int argc, char** argv) {
         std::printf("%-22s %8s %7s %12s %18s %10s %8s %6s\n", "algorithm", "solved", "p", ("median " + bench.primary).c_str(),
                     "25%..75%", "evals", "time", "size");
         md << "## " << bench.name << ": " << bench.description << "\n\n"
-           << "| algorithm | solved (test) | p vs first | median test " << bench.primary << " | 25%..75% | median evaluations | median time (s) | median size |\n"
-           << "|---|---|---|---|---|---|---|---|\n";
+           << "| algorithm | solved (test) | p vs first | median test " << bench.primary << " | 25%..75% | median evaluations | median case evaluations | median time (s) | median size |\n"
+           << "|---|---|---|---|---|---|---|---|---|\n";
         int first_solved = -1;
         for (const auto& algo : algos) {
             if (algo.formula_only && !bench.formula) continue;
@@ -244,18 +251,25 @@ int main(int argc, char** argv) {
                 config_from_json(cfg, common);
                 algo.configure(cfg);
                 auto problem = bench.make(cfg.seed);
+                if (case_budget_gens > 0) {
+                    cfg.max_case_evaluations = static_cast<long>(population) * case_budget_gens *
+                                               static_cast<long>(problem->num_cases(Split::Train));
+                    cfg.generations = 1000000;  // the case budget decides when to stop
+                }
                 results[r] = algo.run(*problem, cfg);
                 std::lock_guard<std::mutex> lock(mu);
                 raw << csv_field(bench.name) << ',' << csv_field(algo.name) << ',' << r << ',' << cfg.seed << ',' << results[r].solved_test << ','
-                    << results[r].test_primary << ',' << results[r].program_evaluations << ',' << results[r].seconds << ','
+                    << results[r].test_primary << ',' << results[r].program_evaluations << ','
+                    << results[r].case_evaluations << ',' << results[r].seconds << ','
                     << results[r].size << '\n';
             });
-            std::vector<double> prim, ev, sec, size;
+            std::vector<double> prim, ev, cev, sec, size;
             int solved = 0;
             for (const auto& r : results) {
                 solved += r.solved_test;
                 prim.push_back(r.test_primary);
                 ev.push_back(static_cast<double>(r.program_evaluations));
+                cev.push_back(static_cast<double>(r.case_evaluations));
                 sec.push_back(r.seconds);
                 size.push_back(r.size);
             }
@@ -272,8 +286,9 @@ int main(int argc, char** argv) {
                           solved, runs, p.c_str(), med, lo, hi, median(ev), median(sec), median(size));
             std::puts(line);
             std::fflush(stdout);
-            std::snprintf(line, sizeof line, "| %s | %d/%d | %s | %.5g | %.4g .. %.4g | %.0f | %.2f | %.0f |\n",
-                          algo.name.c_str(), solved, runs, p.c_str(), med, lo, hi, median(ev), median(sec), median(size));
+            std::snprintf(line, sizeof line, "| %s | %d/%d | %s | %.5g | %.4g .. %.4g | %.0f | %.0f | %.2f | %.0f |\n",
+                          algo.name.c_str(), solved, runs, p.c_str(), med, lo, hi, median(ev), median(cev), median(sec),
+                          median(size));
             md << line;
         }
         md << "\n";

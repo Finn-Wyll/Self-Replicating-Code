@@ -575,6 +575,78 @@ TEST(simplifier_never_makes_any_case_worse) {
     CHECK(shrunk > 30);
 }
 
+TEST(downsampling_and_case_budget) {
+    auto problem = ListProblem::from_params({{"task", "sum"}}, 3);  // 100 training cases
+    EngineConfig cfg;
+    cfg.seed = 3;
+    cfg.population = 40;
+    cfg.generations = 10;
+    cfg.stop_when_solved = false;
+    cfg.downsample = 0.25;
+    std::vector<GenerationReport> reps;
+    Engine e(*problem, cfg);
+    e.on_generation([&](const GenerationReport& r) { reps.push_back(r); });
+    const auto res = e.run();
+    // Each generation: 40 programs x 25 cases, plus the champion re-judged on all 100 cases.
+    CHECK(res.case_evaluations == 10L * (40 * 25 + 100));
+    for (std::size_t i = 1; i < reps.size(); ++i) CHECK(reps[i].best_fitness >= reps[i - 1].best_fitness);
+    // A case budget stops the run before the generation limit.
+    cfg.generations = 1000;
+    cfg.max_case_evaluations = 20000;
+    const auto b = Engine(*problem, cfg).run();
+    CHECK(b.case_evaluations <= 20000 && b.generations < 1000);
+    EngineConfig back;
+    config_from_json(back, config_to_json(cfg));
+    CHECK(back.downsample == 0.25 && back.max_case_evaluations == 20000);
+    bool threw = false;
+    try {
+        EngineConfig bad;
+        config_from_json(bad, nlohmann::json::parse(R"({"downsample": 0})"));
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    CHECK(threw);
+}
+
+TEST(duplicate_cache_changes_nothing_but_cost) {
+    auto problem = FormulaProblem::from_params({{"target", "nguyen7"}}, 6);
+    EngineConfig cfg;
+    cfg.seed = 6;
+    cfg.population = 80;
+    cfg.generations = 15;
+    cfg.stop_when_solved = false;
+    const auto plain = Engine(*problem, cfg).run();
+    cfg.cache_duplicates = true;
+    const auto cached = Engine(*problem, cfg).run();
+    CHECK(plain.best == cached.best && plain.best_fitness == cached.best_fitness);
+    CHECK(cached.case_evaluations < plain.case_evaluations);
+}
+
+TEST(constant_tuning_improves_constants) {
+    // Target is a constant; the only way to improve a program "r0 = c" is to tune c.
+    Dataset d;
+    d.variables = {"x"};
+    for (int i = 0; i < 10; ++i) {
+        d.x.push_back({static_cast<double>(i)});
+        d.y.push_back(2.718);
+    }
+    FormulaProblem problem("const", "constant target", d, d);
+    EngineConfig cfg;
+    cfg.seed = 2;
+    cfg.population = 2;
+    cfg.generations = 30;
+    cfg.elitism = 2;  // keep the program unchanged by variation: only tuning can improve it
+    cfg.ops = {Op::Const};
+    cfg.num_registers = 1;  // the constant always lands in the output register
+    cfg.variation.init_min_length = cfg.variation.init_max_length = 1;
+    cfg.variation.sense_weight = 0;
+    cfg.constant_tuning.enabled = true;
+    cfg.constant_tuning.steps = 30;
+    const auto res = Engine(problem, cfg).run();
+    CHECK(res.best.code.size() == 1 && res.best.code[0].op == Op::Const);
+    CHECK(std::fabs(res.best.code[0].imm - 2.718) < 0.05);
+}
+
 TEST(seeding_config_round_trip) {
     EngineConfig a;
     a.seeding.strains = {"x-v1", "y"};

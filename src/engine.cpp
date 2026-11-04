@@ -57,6 +57,7 @@ struct Individual {
     double parent_fitness = -1e300;
     int parent_stagnation = 0;
     int stagnation = 0;
+    std::size_t mother = static_cast<std::size_t>(-1);  // index of the mother in the previous population
 };
 
 double median_of(std::vector<double>& v) {
@@ -107,28 +108,57 @@ EvolutionResult Engine::run() {
     }
     const int bands = curriculum ? std::clamp(mech.curriculum.bands, 1, std::max(1, W)) : 1;
 
-    long evaluations = 0;
+    if (curriculum && cfg_.downsample < 1.0)
+        throw std::runtime_error("the curriculum cannot be combined with down-sampling");
+
+    long evaluations = 0, case_evaluations = 0, cache_hits = 0, tuned = 0;
     long transfers = 0, duplications = 0;
+
+    // Cases scored this generation: positions into fit_cases. All of them unless down-sampling.
+    const bool downsampling = cfg_.downsample < 1.0 && C > 1;
+    const std::size_t S = downsampling ? std::max<std::size_t>(1, static_cast<std::size_t>(std::ceil(cfg_.downsample * static_cast<double>(C)))) : C;
+    std::vector<std::size_t> active(C);
+    std::iota(active.begin(), active.end(), 0);
+    auto resample = [&] {
+        if (!downsampling) return;
+        std::iota(active.begin(), active.end(), 0);
+        for (std::size_t i = 0; i < S; ++i) std::swap(active[i], active[i + rng.below(C - i)]);  // partial shuffle
+    };
+    resample();
+
+    auto score_on_active = [&](Individual& ind) {
+        Runner runner(spec_);
+        ind.scores.resize(S);
+        double total = 0.0;
+        for (std::size_t k = 0; k < S; ++k)
+            total += ind.scores[k] = problem_.evaluate_case(runner, ind.program, Split::Train, fit_cases[active[k]]);
+        const double mean = S ? total / static_cast<double>(S) : 0.0;
+        ind.mean_steps = S ? static_cast<double>(runner.steps()) / static_cast<double>(S) : 0.0;
+        ind.fitness = mean - cfg_.length_cost * static_cast<double>(ind.program.size()) - cfg_.time_cost * ind.mean_steps;
+    };
 
     auto evaluate = [&](std::vector<Individual>& pop) {
         long fresh = 0;
         for (const auto& ind : pop) fresh += !ind.evaluated;
         evaluations += fresh;
+        case_evaluations += fresh * static_cast<long>(S);
         parallel_for(pop.size(), cfg_.threads, [&](std::size_t i) {
             Individual& ind = pop[i];
             if (ind.evaluated) return;
-            Runner runner(spec_);
-            ind.scores.resize(C);
-            double total = 0.0;
-            for (std::size_t c = 0; c < C; ++c)
-                total += ind.scores[c] = problem_.evaluate_case(runner, ind.program, Split::Train, fit_cases[c]);
-            const double mean = C ? total / static_cast<double>(C) : 0.0;
-            ind.mean_steps = C ? static_cast<double>(runner.steps()) / static_cast<double>(C) : 0.0;
-            ind.fitness = mean - cfg_.length_cost * static_cast<double>(ind.program.size()) -
-                          cfg_.time_cost * ind.mean_steps;
+            score_on_active(ind);
             ind.stagnation = ind.fitness > ind.parent_fitness + 1e-12 ? 0 : ind.parent_stagnation + 1;
             ind.evaluated = true;
         });
+    };
+
+    // Fitness of a program on all selection cases (used for the champion when down-sampling).
+    auto full_fitness = [&](const Program& p) {
+        Runner runner(spec_);
+        double total = 0;
+        for (std::size_t c : fit_cases) total += problem_.evaluate_case(runner, p, Split::Train, c);
+        case_evaluations += static_cast<long>(C);
+        const double n = static_cast<double>(std::max<std::size_t>(1, C));
+        return total / n - cfg_.length_cost * static_cast<double>(p.size()) - cfg_.time_cost * static_cast<double>(runner.steps()) / n;
     };
 
     std::vector<Individual> pop(P);
@@ -149,11 +179,17 @@ EvolutionResult Engine::run() {
     }
 
     // ---- selection helpers -------------------------------------------------------------
-    std::vector<double> eps(C), column(P);
-    std::vector<std::size_t> all_cases(C), case_rank(C), cand, keep, order;
-    std::iota(all_cases.begin(), all_cases.end(), 0);
+    std::vector<double> eps(S), column(P);
+    std::vector<double> matrix;  // case-major copy of the scores: matrix[k * P + i] (cache-friendly lexicase)
+    auto build_matrix = [&](const std::vector<Individual>& pop) {
+        if (cfg_.selection != SelectionMethod::Lexicase) return;
+        matrix.resize(S * P);
+        for (std::size_t i = 0; i < P; ++i)
+            for (std::size_t k = 0; k < S; ++k) matrix[k * P + i] = pop[i].scores[k];
+    };
+    std::vector<std::size_t> case_rank(S), cand, keep, order;
     std::iota(case_rank.begin(), case_rank.end(), 0);  // easiest first (curriculum)
-    std::vector<std::size_t> band_cases_count(static_cast<std::size_t>(bands), C);
+    std::vector<std::size_t> band_cases_count(static_cast<std::size_t>(bands), S);
 
     auto band_of = [&](std::size_t cell) {
         if (!curriculum) return bands - 1;
@@ -163,7 +199,7 @@ EvolutionResult Engine::run() {
     // Fitness as judged in a band: mean over the band's active cases (all cases in the last band).
     auto band_fitness = [&](const Individual& ind, int band) {
         const std::size_t n = band_cases_count[static_cast<std::size_t>(band)];
-        if (n >= C) return ind.fitness;
+        if (n >= S) return ind.fitness;
         double s = 0;
         for (std::size_t k = 0; k < n; ++k) s += ind.scores[case_rank[k]];
         return s / static_cast<double>(n) - cfg_.length_cost * static_cast<double>(ind.program.size()) -
@@ -194,11 +230,13 @@ EvolutionResult Engine::run() {
         cand.clear();
         for (std::size_t k = 0; k < n; ++k) cand.push_back(at(k));
         for (std::size_t c : order) {
+            const double* col = matrix.data() + c * P;
             double best = -1e300;
-            for (std::size_t i : cand) best = std::max(best, pop[i].scores[c]);
+            for (std::size_t i : cand) best = std::max(best, col[i]);
             keep.clear();
+            const double cut = best - eps[c];
             for (std::size_t i : cand)
-                if (pop[i].scores[c] >= best - eps[c]) keep.push_back(i);
+                if (col[i] >= cut) keep.push_back(i);
             cand.swap(keep);
             if (cand.size() <= 1) break;
         }
@@ -217,6 +255,7 @@ EvolutionResult Engine::run() {
     // mother/father/donor are indices into pop.
     auto make_child = [&](const std::vector<Individual>& pop, std::size_t mother, std::size_t father, std::size_t donor) {
         Individual child;
+        child.mother = mother;
         const Individual& m = pop[mother];
         child.parent_fitness = m.fitness;
         child.parent_stagnation = m.stagnation;
@@ -261,7 +300,6 @@ EvolutionResult Engine::run() {
     Individual hall_of_fame;  // best ever (spatial replacement can lose the global best)
     bool have_best = false;
     double hof_validation = -1e300;
-    double last_best_fitness = -1e300;
     auto validation_score = [&](const Program& p) {
         Runner runner(spec_);
         double total = 0;
@@ -270,9 +308,68 @@ EvolutionResult Engine::run() {
         return total / n - cfg_.length_cost * static_cast<double>(p.size()) -
                cfg_.time_cost * static_cast<double>(runner.steps()) / n;
     };
+    // Lamarckian constant tuning: (1+1) search on the effective constants of the best programs,
+    // judged on this generation's cases; improvements are written back into the population.
+    auto tune_constants = [&](std::vector<Individual>& pop) {
+        const auto& ct = cfg_.constant_tuning;
+        if (!ct.enabled || ct.top <= 0 || ct.steps <= 0) return;
+        std::vector<std::size_t> ranked(pop.size());
+        std::iota(ranked.begin(), ranked.end(), 0);
+        const std::size_t top = std::min<std::size_t>(static_cast<std::size_t>(ct.top), pop.size());
+        std::partial_sort(ranked.begin(), ranked.begin() + static_cast<long>(top), ranked.end(),
+                          [&](std::size_t x, std::size_t y) { return pop[x].fitness > pop[y].fitness; });
+        for (std::size_t r = 0; r < top; ++r) {
+            Individual& ind = pop[ranked[r]];
+            const auto mask = effective_mask(spec_, ind.program, outputs);
+            std::vector<std::size_t> consts;
+            for (std::size_t i = 0; i < ind.program.code.size(); ++i)
+                if (mask[i] && ind.program.code[i].op == Op::Const) consts.push_back(i);
+            if (consts.empty()) continue;
+            for (int step = 0; step < ct.steps; ++step) {
+                Individual trial = ind;
+                bool changed = false;
+                for (std::size_t i : consts)
+                    if (consts.size() == 1 || rng.chance(1.0 / static_cast<double>(consts.size()))) {
+                        double& v = trial.program.code[i].imm;
+                        v += rng.normal() * ct.sigma * std::max(std::fabs(v), 0.1);
+                        changed = true;
+                    }
+                if (!changed) {
+                    double& v = trial.program.code[consts[rng.below(consts.size())]].imm;
+                    v += rng.normal() * ct.sigma * std::max(std::fabs(v), 0.1);
+                }
+                score_on_active(trial);
+                ++evaluations;
+                case_evaluations += static_cast<long>(S);
+                if (trial.fitness > ind.fitness + 1e-12) {
+                    trial.stagnation = 0;
+                    ind = std::move(trial);
+                    ++tuned;
+                }
+            }
+        }
+    };
+
+    // Offspring identical to their mother reuse her scores (only valid without down-sampling).
+    auto reuse_scores = [&](const std::vector<Individual>& parents, std::vector<Individual>& children) {
+        if (!cfg_.cache_duplicates) return;
+        for (auto& ch : children) {
+            if (ch.evaluated || ch.mother >= parents.size()) continue;
+            const Individual& m = parents[ch.mother];
+            if (!m.evaluated || m.program.code != ch.program.code) continue;
+            ch.scores = m.scores;
+            ch.fitness = m.fitness;
+            ch.mean_steps = m.mean_steps;
+            ch.stagnation = ch.parent_stagnation + 1;
+            ch.evaluated = true;
+            ++cache_hits;
+        }
+    };
+
     int gen = 0;
     evaluate(pop);
     for (;; ++gen) {
+        tune_constants(pop);
         std::size_t best = 0;
         double sum_fit = 0, sum_len = 0, sum_rate = 0, sum_stress = 0;
         int max_stag = 0;
@@ -284,32 +381,35 @@ EvolutionResult Engine::run() {
             sum_stress += stress_multiplier(pop[i].stagnation);
             max_stag = std::max(max_stag, pop[i].stagnation);
         }
+        // Champion. With down-sampling the generation's best is re-judged on all cases so that
+        // champions from different generations are compared fairly.
+        Individual candidate = pop[best];
+        if (downsampling) candidate.fitness = full_fitness(candidate.program);
+        bool improved = false;
         if (validating) {
             // The final program is chosen on held-back cases, so memorising the selection
             // cases does not win. Ties go to the better training fitness.
-            const double v = validation_score(pop[best].program);
+            const double v = validation_score(candidate.program);
+            case_evaluations += static_cast<long>(val_cases.size());
             if (!have_best || v > hof_validation + 1e-12 ||
-                (v >= hof_validation - 1e-12 && pop[best].fitness > hall_of_fame.fitness)) {
-                hall_of_fame = pop[best];
+                (v >= hof_validation - 1e-12 && candidate.fitness > hall_of_fame.fitness + 1e-12)) {
+                hall_of_fame = std::move(candidate);
                 hof_validation = v;
-                have_best = true;
+                have_best = improved = true;
             }
-        } else if (!have_best || pop[best].fitness > hall_of_fame.fitness) {
-            hall_of_fame = pop[best];
-            have_best = true;
+        } else if (!have_best || candidate.fitness > hall_of_fame.fitness + 1e-12) {
+            hall_of_fame = std::move(candidate);
+            have_best = improved = true;
         }
-        if (pop[best].fitness > last_best_fitness + 1e-12) {
-            last_best_fitness = pop[best].fitness;
-            population_stagnation = 0;
-        } else {
-            ++population_stagnation;
-        }
+        if (improved) population_stagnation = 0;
+        else ++population_stagnation;
         const Program& bp = hall_of_fame.program;
         const double Pd = static_cast<double>(pop.size());
 
         GenerationReport rep;
         rep.generation = gen;
         rep.program_evaluations = evaluations;
+        rep.case_evaluations = case_evaluations;
         rep.seconds = elapsed();
         rep.best_fitness = hall_of_fame.fitness;  // champion's fitness on the selection cases
         rep.mean_fitness = sum_fit / Pd;
@@ -322,19 +422,24 @@ EvolutionResult Engine::run() {
                                 {"max_stagnation", static_cast<double>(max_stag)},
                                 {"transfers", static_cast<double>(transfers)},
                                 {"duplications", static_cast<double>(duplications)},
-                                {"population_stagnation", static_cast<double>(population_stagnation)}};
+                                {"population_stagnation", static_cast<double>(population_stagnation)},
+                                {"cache_hits", static_cast<double>(cache_hits)},
+                                {"constants_tuned", static_cast<double>(tuned)}};
         if (validating) rep.population_stats.push_back({"best_validation_score", hof_validation});
-        transfers = duplications = 0;
+        transfers = duplications = cache_hits = tuned = 0;
         if (callback_) callback_(rep);
 
         const bool solved = cfg_.stop_when_solved && problem_.solved(spec_, bp, Split::Train);
-        const bool budget = cfg_.max_program_evaluations > 0 &&
-                            evaluations + static_cast<long>(P) > cfg_.max_program_evaluations;
+        const long next_cost = static_cast<long>(P * S) * (spatial && downsampling ? 2 : 1);
+        const bool budget = (cfg_.max_program_evaluations > 0 &&
+                             evaluations + static_cast<long>(P) > cfg_.max_program_evaluations) ||
+                            (cfg_.max_case_evaluations > 0 && case_evaluations + next_cost > cfg_.max_case_evaluations);
         if (solved || budget || gen + 1 >= cfg_.generations) break;
 
         // epsilon for lexicase = median absolute deviation of each case's scores
+        build_matrix(pop);
         if (cfg_.selection == SelectionMethod::Lexicase) {
-            for (std::size_t c = 0; c < C; ++c) {
+            for (std::size_t c = 0; c < S; ++c) {
                 for (std::size_t i = 0; i < P; ++i) column[i] = pop[i].scores[c];
                 const double med = median_of(column);
                 for (std::size_t i = 0; i < P; ++i) column[i] = std::fabs(pop[i].scores[c] - med);
@@ -370,6 +475,12 @@ EvolutionResult Engine::run() {
                 const std::size_t father = var.p_crossover > 0 ? select(pop, nullptr, bands - 1) : mother;
                 next.push_back(make_child(pop, mother, father, rng.below(P)));
             }
+            if (downsampling) {
+                resample();
+                for (auto& ind : next) ind.evaluated = false;  // scores are tied to the old sample
+            } else {
+                reuse_scores(pop, next);
+            }
             evaluate(next);
             pop.swap(next);
         } else {
@@ -379,6 +490,13 @@ EvolutionResult Engine::run() {
                 const std::size_t mother = select(pop, &nb, band);
                 const std::size_t father = var.p_crossover > 0 ? select(pop, &nb, band) : mother;
                 next.push_back(make_child(pop, mother, father, nb[rng.below(nb.size())]));
+            }
+            if (downsampling) {
+                resample();
+                for (auto& ind : pop) ind.evaluated = false;  // compare parent and child on the same cases
+                evaluate(pop);
+            } else {
+                reuse_scores(pop, next);
             }
             evaluate(next);
             for (std::size_t cell = 0; cell < P; ++cell) {
@@ -393,6 +511,7 @@ EvolutionResult Engine::run() {
     result.best_fitness = hall_of_fame.fitness;
     result.generations = gen + 1;
     result.program_evaluations = evaluations;
+    result.case_evaluations = case_evaluations;
     result.train_metrics = problem_.metrics(spec_, result.best, Split::Train);
     result.test_metrics = problem_.metrics(spec_, result.best, Split::Test);
     result.solved_train = problem_.solved(spec_, result.best, Split::Train);

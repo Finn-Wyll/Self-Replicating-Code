@@ -234,6 +234,14 @@ json config_to_json(const EngineConfig& c) {
         {"stop_when_solved", c.stop_when_solved},
         {"max_program_evaluations", c.max_program_evaluations},
         {"validation_fraction", c.validation_fraction},
+        {"max_case_evaluations", c.max_case_evaluations},
+        {"downsample", c.downsample},
+        {"cache_duplicates", c.cache_duplicates},
+        {"constant_tuning",
+         {{"enabled", c.constant_tuning.enabled},
+          {"top", c.constant_tuning.top},
+          {"steps", c.constant_tuning.steps},
+          {"sigma", c.constant_tuning.sigma}}},
         {"seeding", seeding_to_json(c.seeding)},
         {"mechanisms", mechanisms_to_json(c.mechanisms)},
         {"variation",
@@ -279,6 +287,21 @@ void config_from_json(EngineConfig& c, const json& j) {
         else if (key == "max_program_evaluations") c.max_program_evaluations = val.get<long>();
         else if (key == "mechanisms") mechanisms_from_json(c.mechanisms, val);
         else if (key == "validation_fraction") c.validation_fraction = val.get<double>();
+        else if (key == "max_case_evaluations") c.max_case_evaluations = val.get<long>();
+        else if (key == "downsample") {
+            c.downsample = val.get<double>();
+            if (!(c.downsample > 0 && c.downsample <= 1)) throw std::runtime_error("downsample must be in (0, 1]");
+        } else if (key == "cache_duplicates") c.cache_duplicates = val.get<bool>();
+        else if (key == "constant_tuning") {
+            if (val.is_boolean()) c.constant_tuning.enabled = val.get<bool>();
+            else {
+                check_keys("constant_tuning", val, {"enabled", "top", "steps", "sigma"});
+                set_field(val, "enabled", c.constant_tuning.enabled);
+                set_field(val, "top", c.constant_tuning.top);
+                set_field(val, "steps", c.constant_tuning.steps);
+                set_field(val, "sigma", c.constant_tuning.sigma);
+            }
+        }
         else if (key == "seeding") seeding_from_json(c.seeding, val);
         else if (key == "variation") {
             auto& v = c.variation;
@@ -315,6 +338,7 @@ json report_to_json(const GenerationReport& r) {
     return json{{"event", "generation"},
                 {"generation", r.generation},
                 {"program_evaluations", r.program_evaluations},
+                {"case_evaluations", r.case_evaluations},
                 {"seconds", r.seconds},
                 {"best_fitness", r.best_fitness},
                 {"mean_fitness", r.mean_fitness},
@@ -329,6 +353,7 @@ json result_to_json(const MachineSpec& spec, const EvolutionResult& r) {
     return json{{"event", "result"},
                 {"generations", r.generations},
                 {"program_evaluations", r.program_evaluations},
+                {"case_evaluations", r.case_evaluations},
                 {"seconds", r.seconds},
                 {"best_fitness", r.best_fitness},
                 {"solved_train", r.solved_train},

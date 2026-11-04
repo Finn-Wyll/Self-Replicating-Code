@@ -79,6 +79,25 @@ struct EngineConfig {
     int threads = 0;           // 0 = hardware concurrency
     bool stop_when_solved = true;
     long max_program_evaluations = 0;  // 0 = no budget beyond generations
+    /// Budget in single case evaluations (one program on one case); 0 = none. This is the fair
+    /// unit when comparing settings that score programs on different numbers of cases.
+    long max_case_evaluations = 0;
+
+    /// Down-sampled lexicase/tournament: each generation, programs are scored on a fresh random
+    /// fraction of the training cases (1 = all). The same budget then buys more generations. The
+    /// champion is always judged on all training cases.
+    double downsample = 1.0;
+    /// Offspring identical to a parent reuse the parent's scores instead of being re-evaluated
+    /// (only without down-sampling, where scores stay valid across generations).
+    bool cache_duplicates = false;
+    /// Lamarckian constant tuning: each generation, a (1+1) local search nudges the effective
+    /// constants of the `top` best programs for `steps` tries; improvements are written back.
+    struct ConstantTuning {
+        bool enabled = false;
+        int top = 1;
+        int steps = 20;
+        double sigma = 0.1;  // relative step size: imm += N(0,1) * sigma * max(|imm|, 0.1)
+    } constant_tuning;
     /// Fraction of the training cases held back to choose the final program (guards against
     /// memorisation). 0 = off: the best program on all training cases wins.
     double validation_fraction = 0.0;
@@ -97,7 +116,8 @@ struct EngineConfig {
 /// Published every generation (the event API that CLI, MCP and a future GUI consume).
 struct GenerationReport {
     int generation = 0;
-    long program_evaluations = 0;  // programs evaluated on the full training set so far
+    long program_evaluations = 0;  // programs evaluated (on the generation's cases) so far
+    long case_evaluations = 0;     // single (program, case) evaluations so far, all purposes
     double seconds = 0.0;
     double best_fitness = 0.0;
     double mean_fitness = 0.0;
@@ -116,6 +136,7 @@ struct EvolutionResult {
     bool solved_train = false, solved_test = false;
     int generations = 0;
     long program_evaluations = 0;
+    long case_evaluations = 0;
     double seconds = 0.0;
 };
 

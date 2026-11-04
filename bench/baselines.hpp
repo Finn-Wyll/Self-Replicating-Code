@@ -12,6 +12,7 @@ struct AlgoResult {
     double test_primary = 0;  // first test metric of the problem (R^2 for formulas, accuracy for lists)
     bool solved_test = false;
     long program_evaluations = 0;
+    long case_evaluations = 0;  // single (program, case) evaluations
     double seconds = 0;
     double size = 0;  // program length / tree nodes / number of coefficients
 };

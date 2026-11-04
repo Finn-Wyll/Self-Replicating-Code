@@ -23,6 +23,7 @@ AlgoResult finish_program(const Problem& problem, const MachineSpec& spec, const
     r.test_primary = te.empty() ? 0 : te[0].value;
     r.solved_test = problem.solved(spec, p, Split::Test);
     r.program_evaluations = evals;
+    r.case_evaluations = evals * static_cast<long>(problem.num_cases(Split::Train));
     r.seconds = since(t0);
     r.size = static_cast<double>(effective_length(spec, p, problem.num_outputs()));
     return r;
@@ -38,6 +39,7 @@ AlgoResult finish_predictions(const FormulaProblem& problem, const std::function
     r.test_primary = m.r2;
     r.solved_test = m.nrmse < FormulaProblem::kSolvedNrmse;
     r.program_evaluations = evals;
+    r.case_evaluations = evals * static_cast<long>(problem.num_cases(Split::Train));
     r.size = size;
     r.seconds = since(t0);
     return r;
@@ -48,7 +50,9 @@ AlgoResult finish_predictions(const FormulaProblem& problem, const std::function
 AlgoResult run_adaptogen(const Problem& problem, const EngineConfig& cfg) {
     const auto t0 = clock_type::now();
     const auto res = run_evolution(problem, cfg);  // honours cfg.seeding (strains, retention)
-    return finish_program(problem, make_machine(problem, cfg), res.best, res.program_evaluations, t0);
+    AlgoResult r = finish_program(problem, make_machine(problem, cfg), res.best, res.program_evaluations, t0);
+    r.case_evaluations = res.case_evaluations;
+    return r;
 }
 
 AlgoResult run_random_search(const Problem& problem, const EngineConfig& cfg) {
