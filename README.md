@@ -15,7 +15,8 @@ You give it only:
 
 It never gets told *how* to solve the problem. Evolution has to find that out.
 
-> Status: **stage 4 of 8** (core engine, bacteria-inspired mechanisms, strain bank, plug-ins). See [DESIGN.md](DESIGN.md) for the full plan:
+> Status: **all 8 stages built**: core engine, bacteria-inspired mechanisms, strain bank, plug-ins,
+> built-in problems, output tools, MCP server for Claude, experiment runner. See [DESIGN.md](DESIGN.md) for the full plan:
 > bacterial mechanisms, the strain bank where saved programs become base classes, generated
 > C++ plug-ins, the MCP server for Claude, and more.
 
@@ -118,6 +119,39 @@ is cheaper, the default generation limit is 1000. Set `"downsample": 1` to score
 Optional extras: `"constant_tuning": true` (local search on the constants of the best programs;
 no significant gain in benchmarks) and `"cache_duplicates": true` (offspring identical to a parent
 reuse its scores; same results, ~3% fewer evaluations, only without down-sampling).
+
+## Built-in problems
+
+| Problem | What evolves | Compared against |
+|---|---|---|
+| `formula` | a formula from data (benchmarks or your CSV) | tree GP, polynomial fit |
+| `list` | sum / max / count of a list (must discover loops) | – |
+| `scheduling` | a rule for ordering tasks with deadlines and priorities | earliest deadline first, weighted shortest job first |
+| `errands` | a rule for visiting shops with opening hours | nearest shop first, earliest closing first |
+| `packing` | a rule for packing a bag with a weight limit | best value per kg; scored against the exact optimum |
+| `meals` | a rule for cheap meals meeting calorie and protein targets | most calories per euro |
+| `bills` | a rule for paying bills, keeping a buffer and saving | pay by due date, save half |
+| `energy` | a thermostat program with changing electricity prices | a standard thermostat |
+| `foraging` | a controller for an agent collecting food on a grid | – |
+
+`scheduling` through `bills` evolve **priority rules**: at each decision the program scores every
+candidate (task, shop, item, food, bill) and the best one is chosen. The result is a reusable
+rule that works on any new instance. `energy` and `foraging` are controllers that run every time
+step and keep their memory. These seven are plug-ins in [problems/](problems/), so they double as
+examples for writing your own. They share channel names (`item.*`, `time.*`, `need.*`) so strains
+can transfer between them.
+
+```bash
+./build/adaptogen evolve --problem scheduling --save-strain my-scheduler
+```
+
+First results (one run each, seed 1, unseen test instances):
+
+| Problem | evolved rule | best reference rule |
+|---|---|---|
+| scheduling: weighted lateness (lower is better) | **92.9** | 147.7 (weighted shortest job first) |
+| errands: score (higher is better) | **0.954** | 0.953 (earliest closing first) |
+| packing: share of the optimum | **99.1%** (70% exactly optimal) | 98.7% (best value per kg) |
 
 ## Bacteria-inspired mechanisms
 
@@ -293,6 +327,76 @@ Built-in problems can still be written directly against `adaptogen::Problem` and
 crashes; they are not a security sandbox. Review generated plug-ins like any other code. Building
 needs a C++20 compiler (`$ADAPTOGEN_CXX`, `$CXX`, or the one adaptogen was built with).
 
+## Output tools
+
+```bash
+./build/adaptogen evolve --problem errands --save-strain errands-rule --lineage errands-lineage.md
+```
+
+```bash
+./build/adaptogen export --strain errands-rule -o errands_rule.hpp
+```
+
+```bash
+./build/adaptogen strains lineage weighted-sum
+```
+
+- **Readable pseudo-code** is printed after every run (simplified; `--all` shows the raw program).
+- **C++ export:** a self-contained header with the evolved program as a function, plus an
+  `Environment` interface to connect it to your data. Formula programs also get a plain
+  `compute(x, y, ...)`. The exported code computes *exactly* what the VM computes, including the
+  protected operators, loop caps and step limit; a test compiles exported programs and compares
+  them with the VM register by register.
+- **Lineage report** (`--lineage FILE.md`): every time the best program improved, what produced it
+  (crossover, a point mutation, an insertion, a horizontal transfer, gene duplication, constant
+  tuning) and the code change as a diff. `strains lineage ID` does the same across a strain's
+  ancestry.
+- **Progress and data:** live progress in the terminal, `--csv` per-generation statistics,
+  `--json` one event per line, `--out` the full result.
+
+## Using it from Claude (MCP)
+
+`adaptogen mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server, so Claude can
+do all of the above for you: understand your scenario, pick or write a problem, evolve, explain
+and save the result.
+
+```bash
+claude mcp add adaptogen -- /path/to/Self-Replicating-Code/build/adaptogen mcp --workspace /path/to/workspace --library /path/to/strains
+```
+
+For Claude Desktop, add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "adaptogen": {
+      "command": "/path/to/Self-Replicating-Code/build/adaptogen",
+      "args": ["mcp", "--workspace", "/path/to/workspace", "--library", "/path/to/strains"]
+    }
+  }
+}
+```
+
+Tools: `list_problems`, `describe_problem`, `evolve_start` / `evolve_status` / `evolve_cancel`
+(evolution runs in the background), `plugin_new`, `plugin_write`, `plugin_read`,
+`plugin_validate`, `strains_list`, `strain_show`, `strain_check`, `strain_simplify`,
+`strain_lineage`, `export_cpp`. Plug-in files can only be written and read inside `--workspace`.
+The server also sends Claude a short workflow guide when it connects.
+
+Then ask, for example: *"Evolve a rule for planning my Saturday errands: the pharmacy closes at
+13:00 and the market at 12:00."* Claude checks the built-in `errands` problem (or writes a
+plug-in for your exact situation), runs evolution, and shows you the rule and how it compares.
+
+## Experiments
+
+```bash
+./build/adaptogen-compare --experiment experiments/quick.json
+```
+
+An experiment file is a JSON description of a comparison: suite, runs, seeds, budget,
+benchmarks, plug-in problems and variants (config overlays). The files in
+[experiments/](experiments/) reproduce the main published comparisons.
+
 ## Comparison with other algorithms
 
 `adaptogen-compare` runs fair comparisons with **the same evaluation budget** and scores
@@ -314,7 +418,9 @@ Current results and an honest discussion are in [benchmarks/RESULTS.md](benchmar
 include/adaptogen/   public API (vm, problem, engine, variation, analysis, serialize, registry,
                      strain, simplify, plugin) and the plug-in SDK (sdk.hpp, plugin_abi.h)
 src/                 engine implementation, CLI, built-in problems, plug-in worker
-bench/               comparison tool and baseline algorithms
+bench/               comparison/experiment tool and baseline algorithms
+problems/            built-in problems written as plug-ins
+experiments/         experiment files for adaptogen-compare
 tests/               unit tests (self-contained runner)
 examples/            configs (quick, bacterial, stress-population, transfer-low), data, plug-ins
 benchmarks/          comparison results

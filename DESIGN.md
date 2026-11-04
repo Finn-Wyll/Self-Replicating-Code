@@ -1,6 +1,7 @@
 # adaptogen: Design Specification
 
-> Status: agreed design, before implementation. Nothing in this document is built yet.
+> Status: **all eight stages are built** (see section 12 for what was built and where it
+> deviates from this plan). Measured results: [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 > Working name: **adaptogen** (adapt + gene); easy to rename.
 
 ## 1. Purpose
@@ -201,3 +202,28 @@ All interfaces are clients of one engine API. The engine never depends on any UI
   instead of placements) transfers little.
 - A seeded strain can occasionally be a worse start than random (negative transfer).
 - Generated plug-ins are unsandboxed native code.
+
+## 12. Implementation status and deviations from the plan
+
+| Stage | Status | Notes |
+|---|---|---|
+| 1. Core engine | done | Linear VM, lexicase/tournament, effective mutation, CLI, formula discovery |
+| 2. Bacterial mechanisms | done | All six switchable; measured in detail. None is a significant improvement yet; population-level stress and low-rate transfer are the most promising (RESULTS §2–3) |
+| 3. Strain bank | done | Plus a verified **simplifier**, which turned out to be what makes cross-task transfer work (RESULTS §4–5) |
+| 4. Plug-ins | done | C ABI + header-only SDK, isolated worker processes, validation, base classes generated from strains |
+| 5. Built-in problems | done | Written as **plug-ins** (`problems/`), not compiled into the engine. Decision problems evolve *priority rules* |
+| 6. Output tools | done | Pseudo-code, exact C++ export, run and strain lineage reports, CSV/JSON |
+| 7. MCP server | done | `adaptogen mcp`: background evolution jobs; file access limited to a workspace |
+| 8. Experiment runner | done | `adaptogen-compare` (suites, ablations, Fisher/CMH tests) + `--experiment FILE.json` |
+
+Additions beyond the original plan, each backed by measurements:
+- **Down-sampled lexicase is the default:** about 3× more solved runs at equal compute; adaptogen
+  went from on par with tree GP to significantly better (RESULTS §6).
+- **Validation split** (`validation_fraction`) to choose the final program on held-back cases.
+- **Budgets in case evaluations**, the fair unit when comparing settings.
+
+Known limits:
+- Tested on Linux only; the macOS paths (`.dylib`, worker discovery) are written but unverified.
+- Worker processes contain crashes but are not a security sandbox.
+- Transfer to a *different* task needs simplified donors and long runs. Block-aware mutation
+  (insertion that grows a loop body) is the most promising next step.
