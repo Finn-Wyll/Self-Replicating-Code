@@ -15,7 +15,7 @@ You give it only:
 
 It never gets told *how* to solve the problem. Evolution has to find that out.
 
-> Status: **stage 2 of 8** (core engine + bacteria-inspired mechanisms). See [DESIGN.md](DESIGN.md) for the full plan:
+> Status: **stage 3 of 8** (core engine, bacteria-inspired mechanisms, strain bank). See [DESIGN.md](DESIGN.md) for the full plan:
 > bacterial mechanisms, the strain bank where saved programs become base classes, generated
 > C++ plug-ins, the MCP server for Claude, and more.
 
@@ -128,6 +128,58 @@ transfer ([examples/transfer-low.json](examples/transfer-low.json)), each used o
 
 Per-generation statistics (mean mutation rate, mean stress multiplier, number of transfers and
 duplications) appear in `--json` output under `population_stats`.
+
+## Strain bank: save evolved programs and build on them
+
+Like a freezer of bacterial stocks: save a good program as a **strain**, then revive it as
+the starting point for a related problem.
+
+```bash
+./build/adaptogen evolve --problem list --param task=sum --generations 300 --save-strain list-sum --description "sums a list"
+```
+
+```bash
+./build/adaptogen strains list
+```
+
+```bash
+./build/adaptogen strains show list-sum
+```
+
+```bash
+./build/adaptogen strains check list-sum --problem list --param task=count_positive
+```
+
+```bash
+./build/adaptogen evolve --problem list --param task=count_positive --seed-strain list-sum
+```
+
+A strain is one human-readable JSON file (`strains/<name>-v<N>.json`, plus `index.json`) holding:
+
+- **interface:** every channel it evolved with (name, kind, arity, description, units), with the
+  ones its code actually uses marked;
+- **behaviour:** the evolved program;
+- **lineage:** parent strains, the problem and settings it evolved with, and its scores.
+
+Saved strains are frozen. Saving the same name again creates the next version, so anything
+derived from `list-sum-v1` never changes underneath you.
+
+**Reviving on another problem.** Channels are matched by name, kind and arity. `strains check`
+reports what matched, what is missing (code using it becomes inactive pseudogenes that evolution
+can repurpose) and what is new. It warns when a matched channel's units or description differ
+(same name, possibly different meaning).
+
+| Option | Meaning |
+|---|---|
+| `--seed-strain ID` | Start from a strain (`list-sum` = latest version, `list-sum-v1` = exact). Repeat to start from **several parents** |
+| `--seed-random F` | Fraction of the population that starts random (default 0.1), as a guard against a misleading start |
+| `--retain W` | Forgetting control: keep scoring on the parent strains' own problems with weight `W` (0 = pure specialisation) |
+| `--map OLD=NEW` | Connect a strain channel to a differently named problem channel |
+| `--library DIR` | Library folder (default `$ADAPTOGEN_LIBRARY` or `./strains`) |
+
+The same settings live in the config's `"seeding"` section, so a JSON config fully describes a
+seeded run. Generated C++ base classes from strains (deriving new problems from a strain's
+interface) come with the plug-in SDK in stage 4.
 
 ## Adding a problem (C++)
 

@@ -29,6 +29,7 @@ public:
         return s;
     }
     const MachineSpec& spec() const { return spec_; }
+    void add_steps(long s) { steps_ += s; }
     long steps() const { return steps_; }
     long runs() const { return runs_; }
 

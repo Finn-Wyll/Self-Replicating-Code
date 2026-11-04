@@ -1,0 +1,114 @@
+{
+  "format": "adaptogen-strain-index/1",
+  "strains": [
+    {
+      "channels": [
+        "list.length",
+        "list.item"
+      ],
+      "created": "2026-11-04T14:06:36Z",
+      "description": "sums a list of numbers (donor, seed 2)",
+      "id": "list-sum-v1",
+      "name": "list-sum",
+      "parents": [],
+      "problem": "list {\"task\":\"sum\"}",
+      "solved_test": true,
+      "test_metrics": {
+        "accuracy": 1.0,
+        "mae": 0.0
+      },
+      "version": 1
+    },
+    {
+      "channels": [
+        "list.length",
+        "list.item"
+      ],
+      "created": "2026-11-04T14:06:47Z",
+      "description": "sums a list of numbers (donor, seed 12)",
+      "id": "list-sum-v2",
+      "name": "list-sum",
+      "parents": [],
+      "problem": "list {\"task\":\"sum\"}",
+      "solved_test": true,
+      "test_metrics": {
+        "accuracy": 1.0,
+        "mae": 0.0
+      },
+      "version": 2
+    },
+    {
+      "channels": [
+        "list.length",
+        "list.item"
+      ],
+      "created": "2026-11-04T14:06:49Z",
+      "description": "sums a list of numbers (donor, seed 17)",
+      "id": "list-sum-v3",
+      "name": "list-sum",
+      "parents": [],
+      "problem": "list {\"task\":\"sum\"}",
+      "solved_test": true,
+      "test_metrics": {
+        "accuracy": 1.0,
+        "mae": 0.0
+      },
+      "version": 3
+    },
+    {
+      "channels": [
+        "list.length",
+        "list.item"
+      ],
+      "created": "2026-11-04T14:06:56Z",
+      "description": "sums a list of numbers (donor, seed 19)",
+      "id": "list-sum-v4",
+      "name": "list-sum",
+      "parents": [],
+      "problem": "list {\"task\":\"sum\"}",
+      "solved_test": true,
+      "test_metrics": {
+        "accuracy": 1.0,
+        "mae": 0.0
+      },
+      "version": 4
+    },
+    {
+      "channels": [
+        "list.length",
+        "list.item"
+      ],
+      "created": "2026-11-04T14:07:10Z",
+      "description": "sums a list of numbers (donor, seed 21)",
+      "id": "list-sum-v5",
+      "name": "list-sum",
+      "parents": [],
+      "problem": "list {\"task\":\"sum\"}",
+      "solved_test": true,
+      "test_metrics": {
+        "accuracy": 1.0,
+        "mae": 0.0
+      },
+      "version": 5
+    },
+    {
+      "channels": [
+        "x"
+      ],
+      "created": "2026-11-04T14:07:12Z",
+      "description": "x^4+x^3+x^2+x (unrelated control donor)",
+      "id": "koza1-v1",
+      "name": "koza1",
+      "parents": [],
+      "problem": "formula {\"target\":\"koza1\"}",
+      "solved_test": false,
+      "test_metrics": {
+        "mae": 0.037214107739693365,
+        "nrmse": 0.07901453496599907,
+        "r2": 0.9937567032641069,
+        "rmse": 0.08331518252994854
+      },
+      "version": 1
+    }
+  ]
+}

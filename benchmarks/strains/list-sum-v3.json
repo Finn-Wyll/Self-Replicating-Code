@@ -1,0 +1,535 @@
+{
+  "behaviour": {
+    "code": [
+      {
+        "args": [
+          6,
+          5,
+          0
+        ],
+        "channel": "list.length",
+        "dst": 1,
+        "op": "sense"
+      },
+      {
+        "a": 1,
+        "b": 3,
+        "op": "iflt"
+      },
+      {
+        "a": 0,
+        "b": 5,
+        "op": "ifeq"
+      },
+      {
+        "a": 2,
+        "dst": 7,
+        "op": "sqrt"
+      },
+      {
+        "a": 4,
+        "dst": 2,
+        "op": "exp"
+      },
+      {
+        "args": [
+          3,
+          7,
+          7
+        ],
+        "channel": "list.item",
+        "dst": 4,
+        "op": "sense"
+      },
+      {
+        "a": 3,
+        "dst": 7,
+        "op": "exp"
+      },
+      {
+        "a": 1,
+        "b": 0,
+        "dst": 7,
+        "op": "max"
+      },
+      {
+        "a": 6,
+        "b": 0,
+        "dst": 0,
+        "op": "max"
+      },
+      {
+        "a": 3,
+        "dst": 2,
+        "op": "neg"
+      },
+      {
+        "args": [
+          6,
+          6,
+          7
+        ],
+        "channel": "list.item",
+        "dst": 6,
+        "op": "sense"
+      },
+      {
+        "a": 7,
+        "b": 1,
+        "op": "ifeq"
+      },
+      {
+        "a": 4,
+        "dst": 2,
+        "op": "exp"
+      },
+      {
+        "args": [
+          3,
+          7,
+          7
+        ],
+        "channel": "list.item",
+        "dst": 4,
+        "op": "sense"
+      },
+      {
+        "a": 3,
+        "dst": 7,
+        "op": "exp"
+      },
+      {
+        "a": 1,
+        "dst": 5,
+        "op": "mov"
+      },
+      {
+        "a": 7,
+        "dst": 2,
+        "op": "mov"
+      },
+      {
+        "a": 5,
+        "b": 2,
+        "dst": 7,
+        "op": "max"
+      },
+      {
+        "a": 5,
+        "b": 0,
+        "dst": 2,
+        "op": "min"
+      },
+      {
+        "args": [
+          3,
+          7,
+          1
+        ],
+        "channel": "list.length",
+        "dst": 4,
+        "op": "sense"
+      },
+      {
+        "a": 0,
+        "b": 3,
+        "dst": 6,
+        "op": "add"
+      },
+      {
+        "a": 2,
+        "body": 3,
+        "dst": 7,
+        "op": "loop"
+      },
+      {
+        "a": 4,
+        "b": 4,
+        "dst": 1,
+        "op": "min"
+      },
+      {
+        "a": 1,
+        "dst": 5,
+        "op": "log"
+      },
+      {
+        "args": [
+          2,
+          0,
+          6
+        ],
+        "channel": "list.length",
+        "dst": 6,
+        "op": "sense"
+      },
+      {
+        "a": 3,
+        "b": 3,
+        "dst": 6,
+        "op": "add"
+      },
+      {
+        "a": 6,
+        "body": 4,
+        "dst": 3,
+        "op": "loop"
+      },
+      {
+        "a": 2,
+        "dst": 0,
+        "op": "log"
+      },
+      {
+        "args": [
+          4,
+          6,
+          6
+        ],
+        "channel": "list.length",
+        "dst": 0,
+        "op": "sense"
+      },
+      {
+        "a": 5,
+        "b": 2,
+        "dst": 7,
+        "op": "max"
+      },
+      {
+        "a": 5,
+        "b": 2,
+        "dst": 2,
+        "op": "min"
+      },
+      {
+        "a": 0,
+        "dst": 6,
+        "op": "log"
+      },
+      {
+        "a": 3,
+        "b": 3,
+        "dst": 4,
+        "op": "mul"
+      },
+      {
+        "a": 0,
+        "b": 3,
+        "dst": 6,
+        "op": "add"
+      },
+      {
+        "a": 2,
+        "b": 3,
+        "op": "ifeq"
+      },
+      {
+        "a": 5,
+        "dst": 5,
+        "op": "neg"
+      },
+      {
+        "a": 4,
+        "b": 0,
+        "dst": 3,
+        "op": "max"
+      },
+      {
+        "a": 1,
+        "dst": 6,
+        "op": "sqrt"
+      },
+      {
+        "a": 7,
+        "dst": 4,
+        "op": "sqrt"
+      },
+      {
+        "a": 0,
+        "b": 2,
+        "op": "ifge"
+      },
+      {
+        "a": 0,
+        "b": 3,
+        "dst": 5,
+        "op": "add"
+      },
+      {
+        "a": 3,
+        "body": 4,
+        "dst": 3,
+        "op": "loop"
+      },
+      {
+        "a": 0,
+        "dst": 3,
+        "op": "neg"
+      },
+      {
+        "a": 5,
+        "dst": 6,
+        "op": "cos"
+      },
+      {
+        "a": 0,
+        "b": 3,
+        "dst": 6,
+        "op": "add"
+      },
+      {
+        "a": 4,
+        "b": 4,
+        "dst": 1,
+        "op": "min"
+      },
+      {
+        "args": [
+          2,
+          0,
+          6
+        ],
+        "channel": "list.length",
+        "dst": 6,
+        "op": "sense"
+      },
+      {
+        "dst": 3,
+        "imm": -4.777290161892929,
+        "op": "const"
+      },
+      {
+        "a": 6,
+        "body": 4,
+        "dst": 3,
+        "op": "loop"
+      },
+      {
+        "args": [
+          3,
+          6,
+          6
+        ],
+        "channel": "list.item",
+        "dst": 0,
+        "op": "sense"
+      },
+      {
+        "a": 3,
+        "dst": 4,
+        "op": "mov"
+      },
+      {
+        "a": 0,
+        "b": 6,
+        "dst": 6,
+        "op": "add"
+      },
+      {
+        "a": 1,
+        "dst": 1,
+        "op": "neg"
+      },
+      {
+        "a": 2,
+        "b": 3,
+        "dst": 0,
+        "op": "sub"
+      },
+      {
+        "a": 2,
+        "b": 5,
+        "op": "ifge"
+      },
+      {
+        "a": 6,
+        "b": 7,
+        "dst": 0,
+        "op": "sub"
+      },
+      {
+        "a": 3,
+        "body": 2,
+        "dst": 3,
+        "op": "loop"
+      },
+      {
+        "a": 3,
+        "b": 3,
+        "op": "ifeq"
+      },
+      {
+        "dst": 1,
+        "imm": 0.5580541383794815,
+        "op": "const"
+      },
+      {
+        "a": 0,
+        "b": 0,
+        "dst": 3,
+        "op": "min"
+      },
+      {
+        "a": 5,
+        "dst": 5,
+        "op": "neg"
+      }
+    ],
+    "format": "adaptogen-program/1",
+    "mutation_rate": 1.0,
+    "registers": 8
+  },
+  "created": "2026-11-04T14:06:49Z",
+  "description": "sums a list of numbers (donor, seed 17)",
+  "format": "adaptogen-strain/1",
+  "id": "list-sum-v3",
+  "interface": {
+    "channels": [
+      {
+        "arity": 0,
+        "description": "number of items in the list",
+        "kind": "sensor",
+        "name": "list.length",
+        "units": "items",
+        "used": true
+      },
+      {
+        "arity": 1,
+        "description": "item at index i (0-based); 0 outside the list",
+        "kind": "sensor",
+        "name": "list.item",
+        "units": "",
+        "used": true
+      }
+    ],
+    "num_outputs": 1,
+    "ops": [
+      "const",
+      "mov",
+      "add",
+      "sub",
+      "mul",
+      "div",
+      "min",
+      "max",
+      "neg",
+      "abs",
+      "sin",
+      "cos",
+      "exp",
+      "log",
+      "sqrt",
+      "iflt",
+      "ifge",
+      "ifeq",
+      "loop"
+    ],
+    "registers": 8
+  },
+  "lineage": {
+    "config": {
+      "const_max": 5.0,
+      "const_min": -5.0,
+      "elitism": 1,
+      "generations": 300,
+      "length_cost": 0.001,
+      "max_loop_body": 4,
+      "max_loop_iterations": 256,
+      "max_program_evaluations": 0,
+      "max_steps": 2000,
+      "mechanisms": {
+        "curriculum": {
+          "bands": 4,
+          "enabled": false,
+          "refresh": 5
+        },
+        "duplication": {
+          "enabled": false,
+          "max_segment": 6,
+          "rate": 0.1
+        },
+        "hypermutation": {
+          "change_sigma": 0.5,
+          "enabled": false,
+          "initial_rate": 1.0,
+          "max_rate": 8.0,
+          "min_rate": 0.2,
+          "p_change": 0.1
+        },
+        "spatial": {
+          "enabled": false,
+          "radius": 1,
+          "width": 0
+        },
+        "stress": {
+          "enabled": false,
+          "growth": 0.5,
+          "max_multiplier": 6.0,
+          "patience": 3,
+          "trigger": "lineage"
+        },
+        "transfer": {
+          "enabled": false,
+          "max_segment": 6,
+          "rate": 0.2
+        }
+      },
+      "ops": [],
+      "population": 500,
+      "registers": 8,
+      "seed": 17,
+      "seeding": {
+        "channel_map": {},
+        "library": "benchmarks/strains",
+        "random_fraction": 0.1,
+        "retain_weight": 0.0,
+        "strains": []
+      },
+      "selection": "lexicase",
+      "stop_when_solved": true,
+      "threads": 4,
+      "time_cost": 0.0,
+      "tournament_size": 4,
+      "validation_fraction": 0.25,
+      "variation": {
+        "act_weight": 3.0,
+        "constant_sigma": 0.5,
+        "effective_mutation": true,
+        "init_max_length": 20,
+        "init_min_length": 4,
+        "max_length": 128,
+        "p_crossover": 0.5,
+        "p_mutation": 1.0,
+        "sense_weight": 3.0,
+        "w_constant": 0.5,
+        "w_delete": 1.0,
+        "w_insert": 1.0,
+        "w_point": 1.0
+      }
+    },
+    "generations": 46,
+    "parents": [],
+    "problem": {
+      "name": "list",
+      "params": {
+        "task": "sum"
+      },
+      "seed": 17
+    },
+    "program_evaluations": 22955
+  },
+  "name": "list-sum",
+  "scores": {
+    "solved_test": true,
+    "test": {
+      "accuracy": 1.0,
+      "mae": 0.0
+    },
+    "train": {
+      "accuracy": 1.0,
+      "mae": 0.0
+    }
+  },
+  "version": 3
+}

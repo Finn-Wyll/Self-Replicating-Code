@@ -82,6 +82,16 @@ struct EngineConfig {
     /// Fraction of the training cases held back to choose the final program (guards against
     /// memorisation). 0 = off: the best program on all training cases wins.
     double validation_fraction = 0.0;
+
+    /// Start from saved strains instead of (only) random programs. Resolved by run_evolution()
+    /// in strain.hpp, which loads the strains from the library; the Engine itself takes programs.
+    struct Seeding {
+        std::vector<std::string> strains;  // strain ids ("name-v2") or names (latest version)
+        std::string library = "strains";   // strain library folder
+        double random_fraction = 0.1;      // share of the population that starts random (diversity)
+        double retain_weight = 0.0;        // keep scoring on the parent strains' problems (0 = specialise)
+        std::vector<std::pair<std::string, std::string>> channel_map;  // strain channel -> problem channel
+    } seeding;
 };
 
 /// Published every generation (the event API that CLI, MCP and a future GUI consume).
@@ -119,10 +129,19 @@ public:
     EvolutionResult run();
     const MachineSpec& machine() const { return spec_; }
 
+    /// Seed the initial population: (1 - random_fraction) of it are copies of these programs
+    /// (round-robin; one exact copy of each, the others mutated once), the rest random.
+    void set_seed_programs(std::vector<Program> programs, double random_fraction) {
+        seeds_ = std::move(programs);
+        seed_random_fraction_ = random_fraction;
+    }
+
 private:
     const Problem& problem_;
     EngineConfig cfg_;
     MachineSpec spec_;
+    std::vector<Program> seeds_;
+    double seed_random_fraction_ = 0.1;
     std::function<void(const GenerationReport&)> callback_;
 };
 

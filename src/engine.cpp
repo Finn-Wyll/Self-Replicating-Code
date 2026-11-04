@@ -132,9 +132,20 @@ EvolutionResult Engine::run() {
     };
 
     std::vector<Individual> pop(P);
-    for (auto& ind : pop) {
-        ind.program = random_program(spec_, var, rng);
-        ind.program.mutation_rate = mech.hypermutation.initial_rate;
+    const std::size_t n_seeded =
+        seeds_.empty() ? 0
+                       : std::min(P, static_cast<std::size_t>(std::lround((1.0 - std::clamp(seed_random_fraction_, 0.0, 1.0)) *
+                                                                          static_cast<double>(P))));
+    for (std::size_t i = 0; i < P; ++i) {
+        Individual& ind = pop[i];
+        if (i < n_seeded) {
+            ind.program = seeds_[i % seeds_.size()];
+            if (i >= seeds_.size()) mutate(ind.program, spec_, var, rng, outputs);
+            if (!mech.hypermutation.enabled) ind.program.mutation_rate = mech.hypermutation.initial_rate;
+        } else {
+            ind.program = random_program(spec_, var, rng);
+            ind.program.mutation_rate = mech.hypermutation.initial_rate;
+        }
     }
 
     // ---- selection helpers -------------------------------------------------------------

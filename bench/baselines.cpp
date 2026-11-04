@@ -7,6 +7,7 @@
 #include <numeric>
 
 #include "adaptogen/analysis.hpp"
+#include "adaptogen/strain.hpp"
 
 namespace adaptogen::bench {
 
@@ -46,9 +47,8 @@ AlgoResult finish_predictions(const FormulaProblem& problem, const std::function
 
 AlgoResult run_adaptogen(const Problem& problem, const EngineConfig& cfg) {
     const auto t0 = clock_type::now();
-    Engine engine(problem, cfg);
-    const auto res = engine.run();
-    return finish_program(problem, engine.machine(), res.best, res.program_evaluations, t0);
+    const auto res = run_evolution(problem, cfg);  // honours cfg.seeding (strains, retention)
+    return finish_program(problem, make_machine(problem, cfg), res.best, res.program_evaluations, t0);
 }
 
 AlgoResult run_random_search(const Problem& problem, const EngineConfig& cfg) {

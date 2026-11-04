@@ -12,6 +12,9 @@
 #include "adaptogen/problems/lists.hpp"
 #include "adaptogen/registry.hpp"
 #include "adaptogen/serialize.hpp"
+#include "adaptogen/strain.hpp"
+
+#include <filesystem>
 
 using namespace adaptogen;
 
@@ -404,6 +407,147 @@ TEST(population_stress_trigger) {
     });
     e.run();
     CHECK(max_stress > 1.0);
+}
+
+namespace {
+// A hand-written strain that sums a list, built the same way the CLI builds one.
+Strain sum_strain(const ListProblem& problem, EngineConfig cfg) {
+    MachineSpec s = make_machine(problem, cfg);
+    EvolutionResult r;
+    r.best = Program{{I(Op::Sense, 1, 0, 0, 0, 0, 0), I(Op::Loop, 2, 1, 0, 2), I(Op::Sense, 3, 2, 0, 0, 0, 1),
+                      I(Op::Add, 0, 0, 3), I(Op::Const, 6, 0, 0, 0, 3.0)}};  // last one is an intron
+    r.test_metrics = problem.metrics(s, r.best, Split::Test);
+    r.solved_test = problem.solved(s, r.best, Split::Test);
+    return make_strain("list-sum", "sums a list", problem, s, r,
+                       {{"name", "list"}, {"params", {{"task", "sum"}}}, {"seed", 1}}, cfg, {});
+}
+
+std::filesystem::path temp_library(const char* name) {
+    auto dir = std::filesystem::temp_directory_path() / (std::string("adaptogen-test-") + name);
+    std::filesystem::remove_all(dir);
+    return dir;
+}
+}  // namespace
+
+TEST(strain_save_load_and_versioning) {
+    auto problem = ListProblem::from_params({{"task", "sum"}}, 1);
+    StrainLibrary lib(temp_library("lib1"));
+    Strain s = sum_strain(*problem, EngineConfig{});
+    CHECK(s.channel_used.size() == 2 && s.channel_used[0] && s.channel_used[1]);
+    const std::string id1 = lib.save(s);
+    const std::string id2 = lib.save(s);
+    CHECK(id1 == "list-sum-v1" && id2 == "list-sum-v2");
+    CHECK(lib.list().size() == 2);
+    CHECK(lib.load("list-sum").version == 2);   // a name loads the latest version
+    CHECK(lib.load("list-sum-v1").version == 1);
+    const Strain back = lib.load(id1);
+    CHECK(back.program == s.program && back.channels.size() == 2 && back.solved_test);
+    CHECK(back.problem.at("name") == "list");
+    std::filesystem::remove(lib.dir() / "index.json");
+    CHECK(lib.list().size() == 2);  // index is rebuilt from the strain files
+    CHECK(!StrainLibrary::valid_name("Bad Name") && !StrainLibrary::valid_name("sum-v3") && StrainLibrary::valid_name("sum.max_2"));
+    bool threw = false;
+    try {
+        lib.load("does-not-exist");
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    CHECK(threw);
+}
+
+TEST(strain_revives_on_compatible_problem) {
+    auto sum = ListProblem::from_params({{"task", "sum"}}, 1);
+    auto max = ListProblem::from_params({{"task", "max"}}, 2);
+    Strain s = sum_strain(*sum, EngineConfig{});
+    const MachineSpec spec = make_machine(*max, EngineConfig{});
+    const Compatibility c = check_compatibility(s, spec.channels);
+    CHECK(c.missing.empty() && c.added.empty() && c.coverage() == 1.0);
+    const Program p = revive(s, spec);
+    CHECK(p.size() == 5 && effective_length(spec, p, 1) == 4);  // the loop structure carries over intact
+}
+
+TEST(strain_pseudogenes_and_channel_maps) {
+    auto sum = ListProblem::from_params({{"task", "sum"}}, 1);
+    Strain s = sum_strain(*sum, EngineConfig{});
+    // A formula problem has none of the list channels: the strain's sensing becomes pseudogenes.
+    auto formula = FormulaProblem::from_params({{"target", "koza1"}}, 1);
+    const MachineSpec fspec = make_machine(*formula, EngineConfig{});
+    const Compatibility c = check_compatibility(s, fspec.channels);
+    CHECK(c.matched.empty() && c.missing.size() == 2 && c.used_missing == 2 && c.coverage() == 0.0);
+    const Program p = revive(s, fspec);
+    int nops = 0;
+    for (const auto& in : p.code) nops += in.op == Op::Nop;
+    CHECK(nops == 2);
+    // A mapping renames channels; a different arity counts as missing; different units warn.
+    std::vector<Channel> renamed = {{"items.count", ChannelKind::Sensor, 0, "number of items in the list", "items"},
+                                    {"items.at", ChannelKind::Sensor, 2, "", ""}};
+    const Compatibility m = check_compatibility(s, renamed, {{"list.length", "items.count"}, {"list.item", "items.at"}});
+    CHECK(m.matched.size() == 1 && m.missing.size() == 1 && !m.warnings.empty());
+    std::vector<Channel> units = {{"list.length", ChannelKind::Sensor, 0, "number of items in the list", "metres"}};
+    bool warned = false;
+    for (const auto& w : check_compatibility(s, units).warnings) warned = warned || w.find("units differ") != std::string::npos;
+    CHECK(warned);
+}
+
+TEST(seeded_run_starts_from_the_strain) {
+    auto dir = temp_library("lib2");
+    StrainLibrary lib(dir);
+    auto sum = ListProblem::from_params({{"task", "sum"}}, 1);
+    lib.save(sum_strain(*sum, EngineConfig{}));
+    // Seeded with a perfect sum strain, a sum problem is solved in the first generation.
+    auto target = ListProblem::from_params({{"task", "sum"}}, 9);
+    EngineConfig cfg;
+    cfg.population = 50;
+    cfg.generations = 5;
+    cfg.seeding.strains = {"list-sum"};
+    cfg.seeding.library = dir.string();
+    PreparedRun prep;
+    const auto res = run_evolution(*target, cfg, {}, &prep);
+    CHECK(prep.strains.size() == 1 && prep.strains[0].id == "list-sum-v1");
+    CHECK(res.generations == 1 && res.solved_test);
+}
+
+TEST(retention_scores_parent_problems) {
+    auto dir = temp_library("lib3");
+    StrainLibrary lib(dir);
+    auto sum = ListProblem::from_params({{"task", "sum"}}, 1);
+    lib.save(sum_strain(*sum, EngineConfig{}));
+    register_builtin_problems();
+    auto max = ListProblem::from_params({{"task", "max"}}, 2);
+    EngineConfig cfg;
+    cfg.seeding.strains = {"list-sum"};
+    cfg.seeding.library = dir.string();
+    cfg.seeding.retain_weight = 0.3;
+    PreparedRun prep = prepare_seeding(*max, cfg);
+    const Problem& p = prep.problem(*max);
+    CHECK(prep.retention != nullptr);
+    CHECK(p.num_cases(Split::Train) == max->num_cases(Split::Train) + sum->num_cases(Split::Train));
+    CHECK(p.num_cases(Split::Test) == max->num_cases(Split::Test));
+    const MachineSpec spec = make_machine(p, cfg);
+    // The sum program is perfect on the parent (sum) cases: its retained score is full accuracy.
+    const auto ms = p.metrics(spec, prep.seeds[0], Split::Train);
+    bool found = false;
+    for (const auto& m : ms)
+        if (m.name.rfind("retained:", 0) == 0) {
+            found = true;
+            CHECK(m.value == 1.0);
+        }
+    CHECK(found);
+    // Mean over all training cases = 0.7 * primary mean + 0.3 * parent mean.
+    const double mixed = p.mean_score(spec, prep.seeds[0], Split::Train);
+    const double primary = max->mean_score(spec, prep.seeds[0], Split::Train);
+    CHECK_NEAR(mixed, 0.7 * primary + 0.3 * 0.0, 1e-9);
+}
+
+TEST(seeding_config_round_trip) {
+    EngineConfig a;
+    a.seeding.strains = {"x-v1", "y"};
+    a.seeding.retain_weight = 0.2;
+    a.seeding.channel_map = {{"a", "b"}};
+    EngineConfig b;
+    config_from_json(b, config_to_json(a));
+    CHECK(b.seeding.strains == a.seeding.strains && b.seeding.retain_weight == 0.2);
+    CHECK(b.seeding.channel_map.size() == 1 && b.seeding.channel_map[0].second == "b");
 }
 
 int main() {

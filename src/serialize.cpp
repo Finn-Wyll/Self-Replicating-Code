@@ -110,7 +110,7 @@ void check_keys(const std::string& section, const json& j, std::initializer_list
         (void)v;
         bool ok = false;
         for (const char* a : allowed) ok = ok || k == a;
-        if (!ok) throw std::runtime_error("unknown key '" + k + "' in mechanisms." + section);
+        if (!ok) throw std::runtime_error("unknown key '" + k + "' in " + section);
     }
 }
 
@@ -122,7 +122,7 @@ void mechanisms_from_json(Mechanisms& m, const json& j) {
             continue;
         }
         if (name == "stress") {
-            check_keys(name, s, {"enabled", "trigger", "patience", "growth", "max_multiplier"});
+            check_keys("mechanisms." + name, s, {"enabled", "trigger", "patience", "growth", "max_multiplier"});
             set_field(s, "enabled", m.stress.enabled);
             set_field(s, "trigger", m.stress.trigger);
             if (m.stress.trigger != "lineage" && m.stress.trigger != "population")
@@ -131,7 +131,7 @@ void mechanisms_from_json(Mechanisms& m, const json& j) {
             set_field(s, "growth", m.stress.growth);
             set_field(s, "max_multiplier", m.stress.max_multiplier);
         } else if (name == "hypermutation") {
-            check_keys(name, s, {"enabled", "initial_rate", "min_rate", "max_rate", "p_change", "change_sigma"});
+            check_keys("mechanisms." + name, s, {"enabled", "initial_rate", "min_rate", "max_rate", "p_change", "change_sigma"});
             set_field(s, "enabled", m.hypermutation.enabled);
             set_field(s, "initial_rate", m.hypermutation.initial_rate);
             set_field(s, "min_rate", m.hypermutation.min_rate);
@@ -139,22 +139,22 @@ void mechanisms_from_json(Mechanisms& m, const json& j) {
             set_field(s, "p_change", m.hypermutation.p_change);
             set_field(s, "change_sigma", m.hypermutation.change_sigma);
         } else if (name == "transfer") {
-            check_keys(name, s, {"enabled", "rate", "max_segment"});
+            check_keys("mechanisms." + name, s, {"enabled", "rate", "max_segment"});
             set_field(s, "enabled", m.transfer.enabled);
             set_field(s, "rate", m.transfer.rate);
             set_field(s, "max_segment", m.transfer.max_segment);
         } else if (name == "duplication") {
-            check_keys(name, s, {"enabled", "rate", "max_segment"});
+            check_keys("mechanisms." + name, s, {"enabled", "rate", "max_segment"});
             set_field(s, "enabled", m.duplication.enabled);
             set_field(s, "rate", m.duplication.rate);
             set_field(s, "max_segment", m.duplication.max_segment);
         } else if (name == "spatial") {
-            check_keys(name, s, {"enabled", "width", "radius"});
+            check_keys("mechanisms." + name, s, {"enabled", "width", "radius"});
             set_field(s, "enabled", m.spatial.enabled);
             set_field(s, "width", m.spatial.width);
             set_field(s, "radius", m.spatial.radius);
         } else if (name == "curriculum") {
-            check_keys(name, s, {"enabled", "bands", "refresh"});
+            check_keys("mechanisms." + name, s, {"enabled", "bands", "refresh"});
             set_field(s, "enabled", m.curriculum.enabled);
             set_field(s, "bands", m.curriculum.bands);
             set_field(s, "refresh", m.curriculum.refresh);
@@ -164,6 +164,32 @@ void mechanisms_from_json(Mechanisms& m, const json& j) {
     }
     if (m.curriculum.enabled && !m.spatial.enabled)
         throw std::runtime_error("mechanisms.curriculum requires mechanisms.spatial to be enabled");
+}
+
+json seeding_to_json(const EngineConfig::Seeding& s) {
+    json map = json::object();
+    for (const auto& [from, to] : s.channel_map) map[from] = to;
+    return json{{"strains", s.strains},
+                {"library", s.library},
+                {"random_fraction", s.random_fraction},
+                {"retain_weight", s.retain_weight},
+                {"channel_map", map}};
+}
+
+void seeding_from_json(EngineConfig::Seeding& s, const json& j) {
+    check_keys("seeding", j, {"strains", "library", "random_fraction", "retain_weight", "channel_map"});
+    if (j.contains("strains")) {
+        s.strains.clear();
+        for (const auto& x : j.at("strains")) s.strains.push_back(x.get<std::string>());
+    }
+    set_field(j, "library", s.library);
+    set_field(j, "random_fraction", s.random_fraction);
+    set_field(j, "retain_weight", s.retain_weight);
+    if (s.retain_weight < 0 || s.retain_weight >= 1) throw std::runtime_error("seeding.retain_weight must be in [0, 1)");
+    if (j.contains("channel_map")) {
+        s.channel_map.clear();
+        for (const auto& [from, to] : j.at("channel_map").items()) s.channel_map.emplace_back(from, to.get<std::string>());
+    }
 }
 
 std::vector<Op> ops_from_json(const json& j) {
@@ -208,6 +234,7 @@ json config_to_json(const EngineConfig& c) {
         {"stop_when_solved", c.stop_when_solved},
         {"max_program_evaluations", c.max_program_evaluations},
         {"validation_fraction", c.validation_fraction},
+        {"seeding", seeding_to_json(c.seeding)},
         {"mechanisms", mechanisms_to_json(c.mechanisms)},
         {"variation",
          {{"init_min_length", v.init_min_length},
@@ -252,6 +279,7 @@ void config_from_json(EngineConfig& c, const json& j) {
         else if (key == "max_program_evaluations") c.max_program_evaluations = val.get<long>();
         else if (key == "mechanisms") mechanisms_from_json(c.mechanisms, val);
         else if (key == "validation_fraction") c.validation_fraction = val.get<double>();
+        else if (key == "seeding") seeding_from_json(c.seeding, val);
         else if (key == "variation") {
             auto& v = c.variation;
             for (const auto& [k, x] : val.items()) {
